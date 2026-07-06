@@ -13,7 +13,7 @@ npm install -g openwiki
 To install this fork directly from GitHub:
 
 ```sh
-npm install -g github:zettalyst/openwiki
+npm install -g https://github.com/zettalyst/openwiki/archive/refs/heads/main.tar.gz
 ```
 
 ## Quick Start
