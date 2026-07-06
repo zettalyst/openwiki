@@ -10,7 +10,12 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatOpenRouter } from "@langchain/openrouter";
-import { createDeepAgent, LocalShellBackend } from "deepagents";
+import {
+  createDeepAgent,
+  GENERAL_PURPOSE_SUBAGENT,
+  LocalShellBackend,
+  type SubAgent,
+} from "deepagents";
 import { loadOpenWikiEnv, openWikiEnvDir } from "../env.js";
 import { createSystemPrompt, createUserPrompt } from "./prompt.js";
 import type {
@@ -57,6 +62,7 @@ import {
   shouldCheckUpdateNoop,
   writeLastUpdateMetadata,
 } from "./utils.js";
+import { createWriteTodosInputNormalizerMiddleware } from "./todo-normalizer.js";
 
 export async function runOpenWikiAgent(
   command: OpenWikiCommand,
@@ -219,9 +225,18 @@ async function runOpenWikiAgentCore(
   emitDebug(options, `checkpointer=${formatUrlDebugValue(checkpointPath)}`);
   const threadId = options.threadId ?? createThreadId(cwd, createRunThreadId());
   emitDebug(options, `thread=${threadId}`);
+  const todoNormalizer = createWriteTodosInputNormalizerMiddleware();
   const agent = createDeepAgent({
     model,
     tools: [],
+    middleware: [todoNormalizer],
+    subagents: [
+      {
+        ...GENERAL_PURPOSE_SUBAGENT,
+        model,
+        middleware: [todoNormalizer],
+      } satisfies SubAgent,
+    ],
     checkpointer,
     backend: new LocalShellBackend({
       maxOutputBytes: 100_000,

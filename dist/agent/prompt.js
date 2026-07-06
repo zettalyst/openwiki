@@ -38,6 +38,12 @@ Planning discipline:
 - Before completing the run, delete ${OPEN_WIKI_DIR}/_plan.md. If there is no filesystem delete tool, use shell execute from the repository root, for example rm -f openwiki/_plan.md.
 - Do not leave ${OPEN_WIKI_DIR}/_plan.md in the final wiki.
 
+Writing discipline:
+- For new documentation pages, and for replacing a complete generated documentation page, use write_file with the complete final Markdown content in one tool call.
+- Do not create placeholder files or placeholder bodies such as PLACEHOLDER_BODY, TODO, or "content coming soon" and then fill them with edit_file.
+- Do not use edit_file to fill an empty file or replace an entire documentation page. Use edit_file only for small, targeted edits to existing content where old_string and new_string are both complete, exact strings.
+- If a whole-page write is too large for one tool call, write a shorter, focused page rather than creating a placeholder and trying to append or replace it later.
+
 Git discipline:
 - Use git heavily where it helps explain why code exists, not just what code exists.
 - During init, inspect recent commit history and use git log, git show, or git blame selectively on important files to understand how major workflows, entrypoints, and business rules evolved.

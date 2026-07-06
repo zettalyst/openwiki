@@ -7,11 +7,12 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatOpenRouter } from "@langchain/openrouter";
-import { createDeepAgent, LocalShellBackend } from "deepagents";
+import { createDeepAgent, GENERAL_PURPOSE_SUBAGENT, LocalShellBackend, } from "deepagents";
 import { loadOpenWikiEnv, openWikiEnvDir } from "../env.js";
 import { createSystemPrompt, createUserPrompt } from "./prompt.js";
 import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, ANTHROPIC_BASE_URL_ENV_KEY, ANTHROPIC_OAUTH_BETA_HEADER, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderBaseUrlEnvKey, createProviderCredentialConfigurationError, getProviderCredentialRequirement, getProviderLabel, isValidModelId, normalizeModelId, OPENAI_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_BASE_URL_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPENROUTER_BASE_URL, OPENROUTER_FALLBACK_MODEL_IDS, OPENWIKI_MODEL_ID_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, providerRequiresBaseUrl, resolveConfiguredProvider, resolveProviderCredential, resolveProviderBaseUrl, } from "../constants.js";
 import { createOpenWikiContentSnapshot, getUpdateNoopStatus, createRunContext, shouldCheckUpdateNoop, writeLastUpdateMetadata, } from "./utils.js";
+import { createWriteTodosInputNormalizerMiddleware } from "./todo-normalizer.js";
 export async function runOpenWikiAgent(command, cwd = process.cwd(), options = {}) {
     emitDebug(options, `command=${command}`);
     emitDebug(options, `cwd=${cwd}`);
@@ -102,9 +103,18 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
     emitDebug(options, `checkpointer=${formatUrlDebugValue(checkpointPath)}`);
     const threadId = options.threadId ?? createThreadId(cwd, createRunThreadId());
     emitDebug(options, `thread=${threadId}`);
+    const todoNormalizer = createWriteTodosInputNormalizerMiddleware();
     const agent = createDeepAgent({
         model,
         tools: [],
+        middleware: [todoNormalizer],
+        subagents: [
+            {
+                ...GENERAL_PURPOSE_SUBAGENT,
+                model,
+                middleware: [todoNormalizer],
+            },
+        ],
         checkpointer,
         backend: new LocalShellBackend({
             maxOutputBytes: 100_000,
