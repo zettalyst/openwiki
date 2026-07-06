@@ -7,17 +7,28 @@ The documentation agent is implemented in `src/agent/`. It takes a command (`cha
 `src/agent/index.ts` follows this sequence for non-chat runs:
 
 1. Load `~/.openwiki/.env` into `process.env`.
-2. Resolve the provider via `resolveConfiguredProvider()` and ensure the provider's API key exists.
-3. Resolve the model ID from CLI input, `OPENWIKI_MODEL_ID`, or the provider's default model.
-4. Create a run context from Git state and prior update metadata.
-5. Snapshot the current `openwiki/` content hash (before the run).
-6. Build the system prompt and user prompt.
-7. Create the provider-specific model client (`ChatAnthropic`, `ChatOpenRouter`, or `ChatOpenAI`).
-8. Create a DeepAgents `LocalShellBackend` rooted at the repository with a SQLite checkpointer.
-9. Stream messages and tool events back to the CLI.
-10. For `init` and `update`, compare the post-run content snapshot to the pre-run snapshot. Write `openwiki/.last-update.json` **only if the content changed**.
+2. For `update` commands with no explicit user message, check `getUpdateNoopStatus()` — if nothing has changed since the last successful update, return early with `{ skipped: true }` and never reach steps 3+. See "Update no-op skip" below.
+3. Resolve the provider via `resolveConfiguredProvider()` and ensure the provider's API key exists.
+4. Resolve the model ID from CLI input, `OPENWIKI_MODEL_ID`, or the provider's default model.
+5. Create a run context from Git state and prior update metadata.
+6. Snapshot the current `openwiki/` content hash (before the run).
+7. Build the system prompt and user prompt.
+8. Create the provider-specific model client (`ChatAnthropic`, `ChatOpenRouter`, or `ChatOpenAI`).
+9. Create a DeepAgents `LocalShellBackend` rooted at the repository with a SQLite checkpointer.
+10. Stream messages and tool events back to the CLI.
+11. For `init` and `update`, compare the post-run content snapshot to the pre-run snapshot. Write `openwiki/.last-update.json` **only if the content changed**.
 
-Chat runs skip metadata writes entirely.
+Chat runs skip metadata writes entirely, and never hit the no-op skip (which only applies to `update`).
+
+## Update no-op skip (pre-run)
+
+Before any provider or model work happens, `shouldCheckUpdateNoop(options)` returns `true` for `update` runs that have no explicit `userMessage` (plain `--update` or scheduled runs; an `/update <message>` follow-up is exempt). When true, `getUpdateNoopStatus(cwd)` in `src/agent/utils.ts` inspects the repository _before_ touching the agent:
+
+1. There must be a prior `openwiki/.last-update.json` with a `gitHead`. No metadata → don't skip.
+2. `git status --short --untracked-files=all` must show no meaningful changes (lines that only touch `openwiki/.last-update.json` are ignored, since that file is the metadata itself). Any other change → don't skip.
+3. If HEAD has moved since `lastUpdate.gitHead`, every path changed in that commit range must live under `openwiki/`. If any changed path is outside `openwiki/` (or the range is empty because of an unreachable head), don't skip.
+
+If all checks pass, `runOpenWikiAgent()` emits a short "no repository changes detected" text event and returns `{ command, model: noopStatus.model, skipped: true }` — no model client, no DeepAgents session, no prompt is built. This is separate from (and cheaper than) the post-run content-snapshot check described below, which still applies to full runs that do reach the agent. `test/update-noop.test.ts` covers the clean-worktree, dirty-worktree, OpenWiki-only-commit, and source-commit cases.
 
 ## Provider-specific model creation
 
@@ -101,6 +112,8 @@ The agent is not just a generic chat wrapper. It is intentionally constrained so
 - Credential loading happens before model resolution; changes there affect both onboarding and agent startup.
 - When adding a provider, add a branch in `createModel()` and ensure the API key env key is checked in `ensureProviderKey()`.
 - The DeepAgents backend is configured with `virtualMode: true`, which is important for documentation-only behavior.
+- The no-op skip only looks at `openwiki/.last-update.json` and git state — it does not re-run the content-snapshot hash. If you change what counts as an "OpenWiki path" or how the metadata file is excluded from `git status`, update `getUpdateNoopStatus()` and its tests together.
+- The no-op skip is bypassed whenever a caller passes a non-blank `userMessage` (e.g. `/update please also check X`), so explicit follow-up update requests always run the agent.
 
 ## Source map
 
@@ -110,4 +123,5 @@ The agent is not just a generic chat wrapper. It is intentionally constrained so
 - `src/agent/types.ts`
 - `src/constants.ts`
 - `src/env.ts`
-- Git evidence: commits `ceded10`, `f89b05d`, `dfa73cc`, `a82759f`, `0fa1430`
+- `test/update-noop.test.ts`, `test/anthropic-model.test.ts`, `test/provider-credential.test.ts`
+- Git evidence: commits `ceded10`, `f89b05d`, `dfa73cc`, `a82759f`, `0fa1430`, `b1b3564`

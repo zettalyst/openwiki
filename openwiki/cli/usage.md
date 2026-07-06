@@ -23,7 +23,11 @@ When `--init` or `--update` is run in a TTY (without `--print`), the CLI starts 
 
 ### Non-interactive mode
 
-If stdin is not a TTY (e.g. CI), or `--print` is used, the CLI requires a provider API key to be already saved in `~/.openwiki/.env` or present in the environment. It will error with a clear message if the key is missing, rather than prompting interactively.
+If stdin is not a TTY (e.g. CI), or `--print` is used, the CLI requires a provider credential to be already saved in `~/.openwiki/.env` or present in the environment. It will error with a clear message if the credential is missing, rather than prompting interactively.
+
+### Update runs may skip the agent entirely
+
+A plain `openwiki --update` (no chat message attached) is checked for a no-op before the agent starts: if nothing meaningful has changed since the last successful update — no working-tree changes and no commits outside `openwiki/` — the CLI prints a short "no repository changes detected" message and exits successfully without calling a model provider at all. Passing an explicit message (`openwiki --update "also check X"` or an `/update <message>` follow-up in chat) always runs the agent. See [Agent workflow](../agent/workflow.md#update-no-op-skip-pre-run) for the exact conditions.
 
 ## Interactive behavior
 
@@ -64,9 +68,11 @@ Providers and their model options are defined in `PROVIDER_CONFIGS` in `src/cons
 | fireworks         | `FIREWORKS_API_KEY`                                                       | `https://api.fireworks.ai/inference/v1` | GLM 5.2, Kimi K2.7 Code                                               |
 | openai            | `OPENAI_API_KEY`                                                          | (default)                               | GPT 5.4 mini, GPT 5.5                                                 |
 | openai-compatible | `OPENAI_COMPATIBLE_API_KEY`                                               | `OPENAI_COMPATIBLE_BASE_URL` (required) | custom model ID only                                                  |
-| anthropic         | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | (default, or `ANTHROPIC_BASE_URL`)      | Haiku, Sonnet, Opus                                                   |
+| anthropic         | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | (default, or `ANTHROPIC_BASE_URL`)      | Opus (default), Sonnet, Haiku                                         |
 
-The default provider is `openrouter`. `resolveConfiguredProvider()` picks the provider from `OPENWIKI_PROVIDER`, falling back to openrouter if `OPENROUTER_API_KEY` is set, then to `DEFAULT_PROVIDER`.
+The default provider is `openrouter`. `resolveConfiguredProvider()` picks the provider from `OPENWIKI_PROVIDER`; when that is unset or invalid, it auto-detects the first provider in the table above with usable credentials in the environment (skipping misconfigured credentials and base-URL-less openai-compatible setups), then falls back to `DEFAULT_PROVIDER`. See [Credentials and updates](../operations/credentials-and-updates.md#provider-resolution) for the exact rules.
+
+On the anthropic provider, Claude 4.6+ models run with adaptive thinking and a 64K output-token ceiling, and xhigh-capable models (Opus 4.7/4.8, Sonnet 5) default to `effort: "xhigh"`. `OPENWIKI_MODEL_EFFORT` overrides the level (`low`/`medium`/`high`/`xhigh`/`max`, or `none` to omit the parameter). Models without adaptive thinking (e.g. Haiku 4.5) use plain API defaults.
 
 ### Alternative base URLs
 

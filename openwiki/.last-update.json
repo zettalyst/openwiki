@@ -1,6 +1,6 @@
 {
-  "updatedAt": "2026-06-30T21:20:03.130Z",
-  "command": "update",
-  "gitHead": "c344dca36e974e67aaa1476474b4b4d43aa6ba7c",
-  "model": "accounts/fireworks/models/glm-5p2"
+  "updatedAt": "2026-07-07T00:00:00.000Z",
+  "command": "init",
+  "gitHead": "23428de0cc0b1b6d3e5d09be413e92a5d6ee451f",
+  "model": "openwiki-docs-agent"
 }

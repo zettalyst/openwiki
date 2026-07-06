@@ -48,9 +48,19 @@ Model creation branches by provider in `src/agent/index.ts` (`createModel`):
 
 The agent uses a DeepAgents `LocalShellBackend` rooted at the repository, configured with `virtualMode: true`, `maxOutputBytes: 100_000`, and a 120 second timeout. A SQLite checkpointer (`~/.openwiki/openwiki.sqlite`) persists conversation threads keyed by a hash of the repository path.
 
+### Pre-run update skip
+
+Before doing any provider/model work, `runOpenWikiAgent()` checks `shouldCheckUpdateNoop()` for `update` commands with no explicit user message (i.e. scheduled/CLI `--update` runs, not `/update <message>` follow-ups). If so, `getUpdateNoopStatus()` in `src/agent/utils.ts` decides whether the run can be skipped **before invoking the agent at all**:
+
+- there must be a recorded `gitHead` from a prior successful update,
+- the working tree must have no meaningful changes (untracked files count, but changes to `openwiki/.last-update.json` itself are ignored),
+- if HEAD has moved since the last update, every changed path in that range must be under `openwiki/`.
+
+When all of those hold, the run short-circuits and returns `{ command, model, skipped: true }` without creating a model client or DeepAgents session — see `OpenWikiRunResult.skipped` in `src/agent/types.ts`. This is distinct from (and runs earlier than) the post-run content-snapshot check below.
+
 ### Content snapshot and metadata writes
 
-After a non-chat run completes, `src/agent/utils.ts` computes a SHA-256 snapshot of the `openwiki/` directory (excluding `.last-update.json`). Metadata is written **only if the snapshot changed** — a no-op update that leaves docs untouched will not update `.last-update.json`. This prevents endless update loops in scheduled workflows.
+After a non-chat run completes (and wasn't skipped by the pre-run check above), `src/agent/utils.ts` computes a SHA-256 snapshot of the `openwiki/` directory (excluding `.last-update.json`). Metadata is written **only if the snapshot changed** — a no-op update that leaves docs untouched will not update `.last-update.json`. This prevents endless update loops in scheduled workflows.
 
 ### Auto-exit behavior
 
@@ -66,6 +76,16 @@ The current design reflects a documentation product rather than a general-purpos
 - Model fallback is handled in the agent runtime, allowing OpenWiki to retry across a small set of models when OpenRouter returns server-side errors.
 - The content-snapshot check prevents metadata churn when an update run produces no documentation changes, which is important for scheduled CI workflows.
 - Auto-exit for init/update makes the CLI usable in both interactive and one-shot contexts without requiring `--print`.
+
+## Testing
+
+Unit tests live in `test/` and run with Vitest (`pnpm test`):
+
+- `test/anthropic-model.test.ts` — Anthropic credential branches in `createModel()` (API key vs. bearer auth-token vs. Claude Code OAuth billing block).
+- `test/provider-credential.test.ts` — `resolveProviderCredential()` and related credential-configuration error/message helpers in `src/constants.ts`.
+- `test/update-noop.test.ts` — `getUpdateNoopStatus()` against real temporary git repos (clean vs. dirty worktree, OpenWiki-only commits vs. source commits).
+
+When changing provider credential logic or the update no-op check, run or extend these tests rather than only manually smoke-testing. Note that `.github/workflows/checks.yml` currently only runs formatting and lint checks on pull requests — `pnpm test` is not wired into CI yet, so run it locally before relying on it as a merge gate.
 
 ## Major extension points
 
@@ -97,4 +117,5 @@ The current design reflects a documentation product rather than a general-purpos
 - `src/agent/types.ts`
 - `src/constants.ts`
 - `package.json`
-- Git evidence: commits `ceded10`, `f89b05d`, `fd3a702`, `8278c36`, `0fa1430`
+- `test/`
+- Git evidence: commits `ceded10`, `f89b05d`, `fd3a702`, `8278c36`, `0fa1430`, `b1b3564`

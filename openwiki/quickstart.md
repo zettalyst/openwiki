@@ -6,10 +6,11 @@ OpenWiki is a TypeScript CLI that writes and maintains documentation for a repos
 
 - Launches an interactive Ink-based terminal app for chatting with the OpenWiki agent.
 - Supports one-shot documentation runs with `--init`, `--update`, and `--print`.
-- Supports multiple model providers — OpenRouter (default), Anthropic, OpenAI, Baseten, and Fireworks — each with their own API key and model list.
+- Supports multiple model providers — OpenRouter (default), Anthropic, OpenAI, an OpenAI-compatible gateway provider, Baseten, and Fireworks — each with their own API key and model list.
 - Uses a DeepAgents local shell backend with virtual filesystem paths rooted at the target repository.
 - Creates or refreshes documentation under the target repository's `openwiki/` directory.
 - Auto-exits after successful `--init` or `--update` runs in an interactive terminal, so the CLI works as both a one-shot and interactive tool.
+- Skips the agent entirely on `--update` runs when nothing has changed since the last successful update, so scheduled automation doesn't waste model calls.
 - Optionally schedules automated updates through a GitHub Actions workflow.
 
 ## Start here
@@ -33,6 +34,8 @@ OpenWiki is a TypeScript CLI that writes and maintains documentation for a repos
 - `src/credentials.tsx` — interactive onboarding flow for provider selection, API keys, and model selection.
 - `src/constants.ts` — provider configs, model options, env keys, and validation helpers.
 - `.github/workflows/openwiki-update.yml` — scheduled automation example.
+- `test/` — Vitest unit tests for Anthropic model creation, provider credential resolution, and the update no-op skip (`pnpm test`).
+- `pnpm-workspace.yaml` — pnpm build allow-list for native/binary deps (`better-sqlite3`, `esbuild`).
 
 ## Documentation map
 

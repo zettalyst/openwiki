@@ -34,15 +34,19 @@ The loader merges those values into `process.env`, while preferring existing pro
 - writes the results with restrictive file permissions,
 - removes deprecated OpenAI-related environment variables when saving.
 
+Submitting a **blank** LangSmith key explicitly writes `LANGSMITH_API_KEY=""` and `LANGCHAIN_TRACING_V2=false`, rather than leaving the field untouched. This matters because a prior setup could have already saved `LANGCHAIN_TRACING_V2=true`; without an explicit off-switch, clearing the key would silently leave tracing enabled with no key configured.
+
 The setup flow runs for **all** interactive commands (chat, init, and update) when credentials are missing — not just chat. In non-interactive mode (no TTY or `--print`), missing provider credentials produce an error instead of a prompt. For the Anthropic provider, credential resolution checks `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY`, then `CLAUDE_CODE_OAUTH_TOKEN`. `ANTHROPIC_API_KEY` is treated as a Console API key only; Claude Code OAuth tokens must be provided through `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`. Requests using `CLAUDE_CODE_OAUTH_TOKEN` include the OpenWiki Claude Code billing system block needed for subscription-routed Sonnet requests.
 
 ## Provider resolution
 
 `resolveConfiguredProvider()` in `src/constants.ts` determines the active provider:
 
-1. If `OPENWIKI_PROVIDER` is set and valid, use it.
-2. Otherwise, if `OPENROUTER_API_KEY` is present, default to `openrouter`.
+1. If `OPENWIKI_PROVIDER` is set and valid, use it (invalid values are ignored with a diagnostics warning).
+2. Otherwise, scan `SELECTABLE_OPENWIKI_PROVIDERS` in order (openrouter, baseten, fireworks, openai, openai-compatible, anthropic) and use the first provider with usable credentials. Detection skips providers with whitespace-only credential values, providers whose credentials are misconfigured (e.g. an OAuth token in `ANTHROPIC_API_KEY`), and providers that require a base URL when none is set.
 3. Otherwise, fall back to `DEFAULT_PROVIDER` (`openrouter`).
+
+This means an environment with only `CLAUDE_CODE_OAUTH_TOKEN` set resolves to the anthropic provider without any other configuration.
 
 `needsCredentialSetup()` in `src/credentials.tsx` checks whether the provider env var, a provider credential, a model ID (unless overridden), and a LangSmith key are all present. Any missing value triggers the interactive flow.
 
@@ -59,6 +63,10 @@ The env layer also produces diagnostics for the CLI UI. Those diagnostics report
 - invalid provider values.
 
 Diagnostics cover all provider keys and Anthropic bearer token env vars plus `OPENWIKI_PROVIDER`, `OPENWIKI_MODEL_ID`, the base URLs (`ANTHROPIC_BASE_URL`, `OPENAI_COMPATIBLE_BASE_URL`), and `LANGSMITH_API_KEY`. This makes startup problems easier to diagnose without exposing secret values (non-secret values such as the provider, model ID, and base URLs are shown in full).
+
+## Update no-op skip
+
+Plain `--update` runs (and scheduled runs, which pass no explicit chat message) are checked **before** the agent starts: `getUpdateNoopStatus()` in `src/agent/utils.ts` looks at the recorded `gitHead` in `.last-update.json`, the working tree status, and — if HEAD has moved — whether every changed path since that `gitHead` is under `openwiki/`. If the repository has no real changes since the last successful update, the run returns immediately with `skipped: true` and never calls a model provider. This is the mechanism scheduled workflows rely on to avoid opening no-op documentation PRs; it runs earlier and independently from the post-run content-snapshot check below. See [Agent workflow](../agent/workflow.md#update-no-op-skip-pre-run) for the exact conditions.
 
 ## Update metadata
 
@@ -95,6 +103,7 @@ The workflow is a good reference for automated maintenance. The repo also contai
 - Scheduled automation depends on the same CLI entrypoint as local users, so workflow changes should be validated against `package.json` and the CLI help text.
 - When adding a provider, update `managedEnvKeys` in `src/env.ts` so the env file is formatted correctly and diagnostics cover the new key.
 - The content-snapshot check means CI runs that produce no changes will not update `.last-update.json` or open a PR with metadata-only changes.
+- The pre-run no-op skip and the post-run content-snapshot check are independent safeguards against the same failure mode (metadata/PR churn on scheduled updates); keep both in mind when changing either one.
 
 ## Source map
 
@@ -105,4 +114,4 @@ The workflow is a good reference for automated maintenance. The repo also contai
 - `src/agent/index.ts`
 - `.github/workflows/openwiki-update.yml`
 - `README.md`
-- Git evidence: commits `ceded10`, `f89b05d`, `8278c36`, `0fa1430`
+- Git evidence: commits `ceded10`, `f89b05d`, `8278c36`, `0fa1430`, `b1b3564`, `ebc4712`
