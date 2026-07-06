@@ -1,0 +1,77 @@
+export declare const OPEN_WIKI_DIR = "openwiki";
+export declare const UPDATE_METADATA_PATH = "openwiki/.last-update.json";
+export declare const BASETEN_API_KEY_ENV_KEY = "BASETEN_API_KEY";
+export declare const FIREWORKS_API_KEY_ENV_KEY = "FIREWORKS_API_KEY";
+export declare const OPENAI_API_KEY_ENV_KEY = "OPENAI_API_KEY";
+export declare const OPENAI_COMPATIBLE_API_KEY_ENV_KEY = "OPENAI_COMPATIBLE_API_KEY";
+export declare const OPENAI_COMPATIBLE_BASE_URL_ENV_KEY = "OPENAI_COMPATIBLE_BASE_URL";
+export declare const ANTHROPIC_API_KEY_ENV_KEY = "ANTHROPIC_API_KEY";
+export declare const ANTHROPIC_AUTH_TOKEN_ENV_KEY = "ANTHROPIC_AUTH_TOKEN";
+export declare const ANTHROPIC_BASE_URL_ENV_KEY = "ANTHROPIC_BASE_URL";
+export declare const CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
+export declare const ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20";
+export declare const CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT = "x-anthropic-billing-header: cc_version=openwiki; cc_entrypoint=openwiki;";
+export declare const OPENROUTER_API_KEY_ENV_KEY = "OPENROUTER_API_KEY";
+export declare const OPENWIKI_PROVIDER_ENV_KEY = "OPENWIKI_PROVIDER";
+export declare const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
+export declare const DEFAULT_PROVIDER = "openrouter";
+export declare const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export type OpenWikiProvider = "anthropic" | "baseten" | "fireworks" | "openai" | "openai-compatible" | "openrouter";
+export type SelectableOpenWikiProvider = OpenWikiProvider;
+export type ProviderModelOption = {
+    id: string;
+    label: string;
+};
+export type ProviderCredential = {
+    envKey: string;
+    type: "api-key" | "auth-token";
+    value: string;
+};
+type ProviderConfig = {
+    apiKeyEnvKey: string;
+    baseURL?: string;
+    /**
+     * Environment variable that, when set, overrides {@link ProviderConfig.baseURL}
+     * with an alternative base URL (e.g. a self-hosted or proxied endpoint).
+     */
+    baseUrlEnvKey?: string;
+    /**
+     * When true, the provider has no default endpoint and requires a base URL to
+     * be supplied via {@link ProviderConfig.baseUrlEnvKey}.
+     */
+    requiresBaseUrl?: boolean;
+    label: string;
+    modelOptions: ProviderModelOption[];
+};
+export declare const SELECTABLE_OPENWIKI_PROVIDERS: readonly ["openrouter", "baseten", "fireworks", "openai", "openai-compatible", "anthropic"];
+export declare const PROVIDER_CONFIGS: Record<OpenWikiProvider, ProviderConfig>;
+export declare const DEFAULT_MODEL_ID: string;
+export declare const OPENROUTER_FALLBACK_MODEL_IDS: string[];
+export declare const SUGGESTED_MODEL_IDS: string[];
+export declare function getProviderConfig(provider: OpenWikiProvider): ProviderConfig;
+export declare function getProviderLabel(provider: OpenWikiProvider): string;
+export declare function getProviderApiKeyEnvKey(provider: OpenWikiProvider): string;
+export declare function getProviderCredentialEnvKeys(provider: OpenWikiProvider): string[];
+export declare function getProviderCredentialRequirement(provider: OpenWikiProvider): string;
+export declare function createProviderCredentialRequiredMessage(provider: OpenWikiProvider, mode: "interactive" | "non-interactive"): string;
+export declare function createProviderCredentialConfigurationError(provider: OpenWikiProvider, env?: NodeJS.ProcessEnv): string | null;
+export declare function resolveProviderCredential(provider: OpenWikiProvider, env?: NodeJS.ProcessEnv): ProviderCredential | null;
+/**
+ * Resolves the base URL for a provider, preferring an alternative base URL from
+ * the provider's configured environment variable over the built-in default.
+ * Returns `undefined` when neither is set, so callers fall back to the SDK's
+ * own default endpoint.
+ */
+export declare function resolveProviderBaseUrl(provider: OpenWikiProvider, env?: NodeJS.ProcessEnv): string | undefined;
+export declare function getProviderBaseUrlEnvKey(provider: OpenWikiProvider): string | undefined;
+export declare function providerRequiresBaseUrl(provider: OpenWikiProvider): boolean;
+export declare function isValidBaseUrl(value: string): boolean;
+export declare function getProviderModelOptions(provider: OpenWikiProvider): ProviderModelOption[];
+export declare function getDefaultModelId(provider: OpenWikiProvider): string;
+export declare function normalizeProvider(value: string | null | undefined): OpenWikiProvider | null;
+export declare function isValidProvider(value: string): value is OpenWikiProvider;
+export declare function resolveConfiguredProvider(env?: NodeJS.ProcessEnv): OpenWikiProvider;
+export declare function normalizeModelId(value: string): string;
+export declare function isValidModelId(value: string): boolean;
+export declare const OPENWIKI_VERSION = "0.0.1";
+export {};

@@ -34,8 +34,7 @@
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
     "prebuild": "npm run clean",
-    "prepare": "npm run build",
-    "prepack": "npm run build",
+    "prepack": "test -f dist/cli.js || npm run build",
     "start": "node dist/cli.js",
     "test": "vitest run"
   },
