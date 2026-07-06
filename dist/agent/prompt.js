@@ -150,7 +150,8 @@ export function createModeInstructions(command) {
 - Use git evidence during init to understand how important files and workflows came to be. Prefer recent commits and targeted git blame/show on high-signal files.
 - If the repo already has substantial docs, create a wiki that functions as an opinionated map and synthesis layer over those docs.
 - Create ${OPEN_WIKI_DIR}/quickstart.md first, then the linked section pages.
-- Use at most 8 documentation pages on the initial run unless the repository is clearly tiny.
+- Use at most 4 documentation pages on the initial run unless the user explicitly asks for a broader wiki in the same command.
+- For large repositories, prefer ${OPEN_WIKI_DIR}/quickstart.md plus 2-3 broad, canonical pages. Defer deeper topic splits to later update runs instead of trying to finish every possible section at once.
 - Do not try to document every source file. Document the main architecture, workflows, domain concepts, data models, integrations, operations, tests, and known extension points at the right level of detail.
 - The CLI will record successful run metadata in ${UPDATE_METADATA_PATH} after you finish.
 `.trim();

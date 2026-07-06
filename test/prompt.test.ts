@@ -11,4 +11,11 @@ describe("createSystemPrompt", () => {
     expect(prompt).toContain("Do not create placeholder files");
     expect(prompt).toContain("Do not use edit_file to fill an empty file");
   });
+
+  test("keeps the initial wiki focused", () => {
+    const prompt = createSystemPrompt("init");
+
+    expect(prompt).toContain("Use at most 4 documentation pages");
+    expect(prompt).toContain("quickstart.md plus 2-3 broad, canonical pages");
+  });
 });

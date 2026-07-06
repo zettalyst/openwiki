@@ -35,6 +35,7 @@ export type OpenWikiRunOptions = {
   isFollowup?: boolean;
   modelId?: string | null;
   onEvent?: (event: OpenWikiRunEvent) => void;
+  streamInactivityTimeoutMs?: number | null;
   threadId?: string;
   userMessage?: string | null;
 };

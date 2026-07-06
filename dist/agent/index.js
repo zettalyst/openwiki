@@ -11,6 +11,8 @@ import { createSystemPrompt, createUserPrompt } from "./prompt.js";
 import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, ANTHROPIC_BASE_URL_ENV_KEY, ANTHROPIC_OAUTH_BETA_HEADER, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderBaseUrlEnvKey, createProviderCredentialConfigurationError, getProviderCredentialRequirement, getProviderLabel, isValidModelId, normalizeModelId, OPENAI_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_BASE_URL_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPENROUTER_BASE_URL, OPENROUTER_FALLBACK_MODEL_IDS, OPENWIKI_MODEL_ID_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, providerRequiresBaseUrl, resolveConfiguredProvider, resolveProviderCredential, resolveProviderBaseUrl, } from "../constants.js";
 import { createOpenWikiContentSnapshot, getUpdateNoopStatus, createRunContext, shouldCheckUpdateNoop, writeLastUpdateMetadata, } from "./utils.js";
 import { createWriteTodosInputNormalizerMiddleware } from "./todo-normalizer.js";
+const DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS = 600_000;
+const STREAM_INACTIVITY_TIMEOUT_ENV_KEY = "OPENWIKI_STREAM_INACTIVITY_TIMEOUT_MS";
 export async function runOpenWikiAgent(command, cwd = process.cwd(), options = {}) {
     emitDebug(options, `command=${command}`);
     emitDebug(options, `cwd=${cwd}`);
@@ -138,17 +140,14 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
         subgraphs: true,
     });
     emitDebug(options, "stream=started modes=messages,tools subgraphs=true");
-    let unhandledChunkCount = 0;
-    for await (const chunk of stream) {
-        const event = parseStreamEvent(chunk);
-        if (event) {
-            options.onEvent?.(event);
-        }
-        else if (options.debug && unhandledChunkCount < 3) {
-            emitDebug(options, `stream.unhandledChunk ${describeStreamChunkShape(chunk)}`);
-            unhandledChunkCount += 1;
-        }
-    }
+    const streamInactivityTimeoutMs = resolveStreamInactivityTimeoutMs(options);
+    emitDebug(options, `stream.inactivityTimeoutMs=${streamInactivityTimeoutMs}`);
+    await consumeOpenWikiAgentStream(stream, options, {
+        command,
+        modelId,
+        provider,
+        timeoutMs: streamInactivityTimeoutMs,
+    });
     emitDebug(options, "stream=completed");
     if (command !== "chat" &&
         openWikiSnapshotBefore !== (await createOpenWikiContentSnapshot(cwd))) {
@@ -206,6 +205,103 @@ function createRunThreadId() {
     return `${Date.now().toString(36)}-${Math.random()
         .toString(36)
         .slice(2, 10)}`;
+}
+export async function consumeOpenWikiAgentStream(stream, options, context) {
+    const iterator = stream[Symbol.asyncIterator]();
+    let unhandledChunkCount = 0;
+    let lastActivity = "stream start";
+    try {
+        while (true) {
+            const next = await nextStreamChunkWithInactivityTimeout(iterator, context, lastActivity);
+            if (next.done) {
+                return;
+            }
+            const event = parseStreamEvent(next.value);
+            if (event) {
+                lastActivity = formatStreamActivity(event);
+                options.onEvent?.(event);
+            }
+            else {
+                lastActivity = `unhandled chunk: ${describeStreamChunkShape(next.value)}`;
+                if (options.debug && unhandledChunkCount < 3) {
+                    emitDebug(options, `stream.unhandledChunk ${lastActivity}`);
+                    unhandledChunkCount += 1;
+                }
+            }
+        }
+    }
+    catch (error) {
+        if (error instanceof StreamInactivityTimeoutError) {
+            void iterator.return?.().catch(() => {
+                // The timeout error is the actionable failure; cleanup errors add noise.
+            });
+        }
+        throw error;
+    }
+}
+async function nextStreamChunkWithInactivityTimeout(iterator, context, lastActivity) {
+    if (context.timeoutMs <= 0) {
+        return iterator.next();
+    }
+    let timeout = null;
+    try {
+        return await Promise.race([
+            iterator.next(),
+            new Promise((_, reject) => {
+                timeout = setTimeout(() => {
+                    reject(createStreamInactivityTimeoutError(context, lastActivity));
+                }, context.timeoutMs);
+            }),
+        ]);
+    }
+    finally {
+        if (timeout) {
+            clearTimeout(timeout);
+        }
+    }
+}
+class StreamInactivityTimeoutError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "OpenWikiStreamInactivityTimeoutError";
+    }
+}
+function createStreamInactivityTimeoutError(context, lastActivity) {
+    return new StreamInactivityTimeoutError([
+        `OpenWiki agent stream produced no events for ${context.timeoutMs} ms.`,
+        `command=${context.command}`,
+        `provider=${context.provider}`,
+        `model=${context.modelId}`,
+        `lastActivity=${lastActivity}`,
+        "The run was aborted instead of waiting indefinitely. Re-run with OPENWIKI_DEBUG=1 for stream/tool diagnostics, or increase OPENWIKI_STREAM_INACTIVITY_TIMEOUT_MS if the model is legitimately taking longer.",
+    ].join("\n"));
+}
+function formatStreamActivity(event) {
+    if (event.type === "tool_start") {
+        return `tool:start ${event.name}`;
+    }
+    if (event.type === "tool_end") {
+        return `tool:${event.status} ${event.name}`;
+    }
+    if (event.type === "debug") {
+        return `debug ${event.message}`;
+    }
+    return `text ${event.source ?? "main"}`;
+}
+function resolveStreamInactivityTimeoutMs(options) {
+    if (typeof options.streamInactivityTimeoutMs === "number") {
+        return normalizeStreamInactivityTimeoutMs(options.streamInactivityTimeoutMs);
+    }
+    const rawValue = process.env[STREAM_INACTIVITY_TIMEOUT_ENV_KEY];
+    if (rawValue) {
+        return normalizeStreamInactivityTimeoutMs(Number(rawValue));
+    }
+    return DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS;
+}
+function normalizeStreamInactivityTimeoutMs(value) {
+    return Number.isFinite(value) && value >= 0
+        ? Math.floor(value)
+        : DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS;
 }
 function emitDebug(options, message) {
     if (!options.debug) {
