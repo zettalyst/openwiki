@@ -15,6 +15,7 @@ import {
   OPENAI_COMPATIBLE_API_KEY_ENV_KEY,
   OPENAI_COMPATIBLE_BASE_URL_ENV_KEY,
   OPENROUTER_API_KEY_ENV_KEY,
+  OPENWIKI_LANGUAGE_ENV_KEY,
   OPENWIKI_MODEL_EFFORT_ENV_KEY,
   OPENWIKI_MODEL_ID_ENV_KEY,
   OPENWIKI_PROVIDER_ENV_KEY,
@@ -51,6 +52,7 @@ const managedEnvKeys = [
   OPENWIKI_PROVIDER_ENV_KEY,
   OPENWIKI_MODEL_ID_ENV_KEY,
   OPENWIKI_MODEL_EFFORT_ENV_KEY,
+  OPENWIKI_LANGUAGE_ENV_KEY,
   "LANGSMITH_API_KEY",
   "LANGCHAIN_PROJECT",
   "LANGCHAIN_TRACING_V2",
@@ -97,6 +99,7 @@ export async function getCredentialDiagnostics(): Promise<
     createCredentialDiagnostic(OPENROUTER_API_KEY_ENV_KEY, fileEnv),
     createCredentialDiagnostic(OPENWIKI_MODEL_ID_ENV_KEY, fileEnv),
     createCredentialDiagnostic(OPENWIKI_MODEL_EFFORT_ENV_KEY, fileEnv),
+    createCredentialDiagnostic(OPENWIKI_LANGUAGE_ENV_KEY, fileEnv),
     createCredentialDiagnostic("LANGSMITH_API_KEY", fileEnv),
   ];
 }
@@ -189,6 +192,7 @@ function isNonSecretDiagnosticKey(key: string): boolean {
   return (
     key === OPENWIKI_MODEL_ID_ENV_KEY ||
     key === OPENWIKI_MODEL_EFFORT_ENV_KEY ||
+    key === OPENWIKI_LANGUAGE_ENV_KEY ||
     key === OPENWIKI_PROVIDER_ENV_KEY ||
     key === ANTHROPIC_BASE_URL_ENV_KEY ||
     key === OPENAI_COMPATIBLE_BASE_URL_ENV_KEY

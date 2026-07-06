@@ -1,5 +1,21 @@
-import { OPEN_WIKI_DIR, UPDATE_METADATA_PATH } from "../constants.js";
+import {
+  DEFAULT_WIKI_LANGUAGE,
+  formatLanguageForPrompt,
+  OPEN_WIKI_DIR,
+  UPDATE_METADATA_PATH,
+} from "../constants.js";
 import { OpenWikiCommand, RunContext, UpdateMetadata } from "./types.js";
+
+export type PromptOptions = {
+  language?: string;
+  isLanguageMigration?: boolean;
+};
+
+function resolvePromptLanguageLabel(promptOptions?: PromptOptions): string {
+  return formatLanguageForPrompt(
+    promptOptions?.language ?? DEFAULT_WIKI_LANGUAGE,
+  );
+}
 
 function formatLastUpdate(lastUpdate: UpdateMetadata | null): string {
   if (lastUpdate === null) {
@@ -9,7 +25,12 @@ function formatLastUpdate(lastUpdate: UpdateMetadata | null): string {
   return JSON.stringify(lastUpdate, null, 2);
 }
 
-export function createSystemPrompt(command: OpenWikiCommand): string {
+export function createSystemPrompt(
+  command: OpenWikiCommand,
+  promptOptions?: PromptOptions,
+): string {
+  const languageLabel = resolvePromptLanguageLabel(promptOptions);
+
   return `
 You are OpenWiki, an expert technical writer, software architect, and product analyst.
 
@@ -49,6 +70,15 @@ Writing discipline:
 - Do not create placeholder files or placeholder bodies such as PLACEHOLDER_BODY, TODO, or "content coming soon" and then fill them with edit_file.
 - Do not use edit_file to fill an empty file or replace an entire documentation page. Use edit_file only for small, targeted edits to existing content where old_string and new_string are both complete, exact strings.
 - If a whole-page write is too large for one tool call, write a shorter, focused page rather than creating a placeholder and trying to append or replace it later.
+
+Language discipline:
+- The configured documentation language for this repository is ${languageLabel}.
+- Write all wiki documentation content in ${languageLabel}: page titles, headings, body text, tables, and link text.
+- Respond to the user in ${languageLabel} as well for run summaries and caveats. If the user writes to you in a different language, mirror the user's language in conversational replies while keeping documentation content in ${languageLabel}.
+- Keep code identifiers, commands, file paths, API names, configuration keys, log excerpts, and code blocks in their original form. Keep established technical terms in English when translating them would hurt clarity.
+- Keep every documentation file name and directory name in English (for example ${OPEN_WIKI_DIR}/quickstart.md and section directories such as architecture/). Only the Markdown content is localized.
+- Exception: the OpenWiki reference section in top-level /AGENTS.md and /CLAUDE.md must always use the exact English template shown below, regardless of the documentation language. Never translate that section, and never treat its English wording as stale.
+- Treat any existing wiki page written in a language other than ${languageLabel} as stale: convert it to ${languageLabel} while preserving its meaning, structure, and links. This conversion overrides the surgical-update restrictions for the affected pages — it needs no source-change justification, does not count against the update diff budget, and is not a formatting-only edit.
 
 Git discipline:
 - Use git heavily where it helps explain why code exists, not just what code exists.
@@ -92,6 +122,7 @@ OpenWiki CLI reference:
 - \`openwiki --update [message]\` updates existing OpenWiki documentation for the current repository.
 - \`openwiki -p "message"\` or \`openwiki --print "message"\` runs once, prints the final assistant output, and exits.
 - \`openwiki --modelId <id>\` selects a model ID for that run.
+- \`openwiki --language <lang>\` selects the wiki documentation language for that run and records it in the update metadata. Without the flag, the language comes from the repository's recorded language, then the OPENWIKI_LANGUAGE environment variable, then the built-in default ko (Korean).
 - \`openwiki --help\` prints current usage, options, and examples.
 
 If the user asks what the CLI can do, asks for commands/options/usage/examples, or asks for more details about OpenWiki itself, run \`openwiki --help\` with the available tools when possible and base your answer on the help output. If you cannot run the command, answer from the CLI reference above and say you could not verify live help output.
@@ -135,11 +166,14 @@ Required documentation structure:
 - Track the last successful documentation update in ${UPDATE_METADATA_PATH}.
 
 Mode-specific behavior:
-${createModeInstructions(command)}
+${createModeInstructions(command, promptOptions)}
 `.trim();
 }
 
-export function createModeInstructions(command: OpenWikiCommand): string {
+export function createModeInstructions(
+  command: OpenWikiCommand,
+  promptOptions?: PromptOptions,
+): string {
   if (command === "chat") {
     return `
 - This is an interactive chat turn.
@@ -161,6 +195,21 @@ export function createModeInstructions(command: OpenWikiCommand): string {
 - Use at most 4 documentation pages on the initial run unless the user explicitly asks for a broader wiki in the same command.
 - For large repositories, prefer ${OPEN_WIKI_DIR}/quickstart.md plus 2-3 broad, canonical pages. Defer deeper topic splits to later update runs instead of trying to finish every possible section at once.
 - Do not try to document every source file. Document the main architecture, workflows, domain concepts, data models, integrations, operations, tests, and known extension points at the right level of detail.
+- The CLI will record successful run metadata in ${UPDATE_METADATA_PATH} after you finish.
+`.trim();
+  }
+
+  if (promptOptions?.isLanguageMigration) {
+    const languageLabel = resolvePromptLanguageLabel(promptOptions);
+
+    return `
+- This is a documentation language migration run. The requested documentation language (${languageLabel}) differs from the language recorded for the previous successful run.
+- Inspect the existing ${OPEN_WIKI_DIR}/ documentation, then rewrite every wiki page in ${languageLabel}.
+- Preserve each page's meaning, structure, heading hierarchy, links, code blocks, and source references. Beyond the language conversion itself, change content only where recent source changes made it inaccurate; the language migration is the primary goal of this run.
+- Do not limit the scope of this run: every wiki page must be converted, regardless of how many source files changed.
+- Keep every documentation file name and directory name unchanged.
+- Keep the OpenWiki reference section in top-level /AGENTS.md and /CLAUDE.md in its exact English template.
+- Do not leave any page partially converted. Before finishing, re-check every Markdown file under ${OPEN_WIKI_DIR}/ and convert any remaining prose that is not in ${languageLabel}, keeping code blocks, identifiers, and other original-form content as the language rules require.
 - The CLI will record successful run metadata in ${UPDATE_METADATA_PATH} after you finish.
 `.trim();
   }
@@ -188,7 +237,10 @@ export function createUserPrompt(
   command: OpenWikiCommand,
   context: RunContext,
   userMessage: string | null = null,
+  promptOptions?: PromptOptions,
 ): string {
+  const languageLabel = resolvePromptLanguageLabel(promptOptions);
+
   if (command === "chat") {
     return userMessage?.trim() || "Start an OpenWiki chat.";
   }
@@ -202,7 +254,26 @@ Inspect the project thoroughly, identify the major technical and business domain
 
 Start with ${OPEN_WIKI_DIR}/quickstart.md as the entrypoint. Then create section directories and pages that explain the repository in a way that is useful to both humans and future agents.
 
+Write all documentation content in ${languageLabel}.
+
 Git context:
+${context.gitSummary}
+`.trim(),
+      userMessage,
+    );
+  }
+
+  if (promptOptions?.isLanguageMigration) {
+    return appendUserMessage(
+      `
+Migrate the existing OpenWiki documentation for this repository to ${languageLabel}.
+
+Inspect ${OPEN_WIKI_DIR}/ and rewrite every documentation page in ${languageLabel}, preserving meaning, structure, links, and source references. Apply content corrections required by recent source changes while converting each page. Do not leave any page in the previous language. The CLI will update ${UPDATE_METADATA_PATH} after the run.
+
+Last update metadata:
+${formatLastUpdate(context.lastUpdate)}
+
+Git change summary:
 ${context.gitSummary}
 `.trim(),
       userMessage,

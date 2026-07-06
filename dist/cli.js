@@ -7,7 +7,7 @@ import { helpContent, isDevelopmentMode, parseCommand, } from "./commands.js";
 import { InitSetup, needsCredentialSetup, } from "./credentials.js";
 import { getCredentialDiagnostics, loadOpenWikiEnv, saveOpenWikiEnv, } from "./env.js";
 import { createOpenWikiThreadId, runOpenWikiAgent } from "./agent/index.js";
-import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, createProviderCredentialConfigurationError, createProviderCredentialRequiredMessage, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderCredentialRequirement, getProviderLabel, getProviderModelOptions, isValidModelId, normalizeModelId, normalizeProvider, OPENAI_API_KEY_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, OPENWIKI_MODEL_ID_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPEN_WIKI_DIR, resolveConfiguredProvider, resolveProviderCredential, SELECTABLE_OPENWIKI_PROVIDERS, OPENWIKI_VERSION, } from "./constants.js";
+import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, createProviderCredentialConfigurationError, createProviderCredentialRequiredMessage, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderCredentialRequirement, getProviderLabel, getProviderModelOptions, isValidLanguage, isValidModelId, normalizeLanguage, normalizeModelId, normalizeProvider, OPENAI_API_KEY_ENV_KEY, OPENWIKI_LANGUAGE_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, OPENWIKI_MODEL_ID_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPEN_WIKI_DIR, resolveConfiguredProvider, resolveProviderCredential, SELECTABLE_OPENWIKI_PROVIDERS, OPENWIKI_VERSION, } from "./constants.js";
 const OPENWIKI_LOGO_LINES = [
     "  ___                  __        ___ _    _ ",
     " / _ \\ _ __   ___ _ __ \\ \\      / (_) | _(_)",
@@ -20,10 +20,12 @@ const OPENWIKI_LOGO_WIDTH = Math.max(...OPENWIKI_LOGO_LINES.map((line) => line.l
 function App({ command }) {
     const app = useApp();
     const startupModelId = command.kind === "run" ? command.modelId : null;
+    const startupLanguage = command.kind === "run" ? command.language : null;
     const startupProvider = resolveConfiguredProvider();
     const autoExitOnSuccess = shouldAutoExitStartupRun(command);
     const [sessionProvider, setSessionProvider] = useState(startupProvider);
     const [sessionModelId, setSessionModelId] = useState(startupModelId);
+    const [sessionLanguage, setSessionLanguage] = useState(startupLanguage);
     const activeRunId = useRef(0);
     const sessionThreadId = useRef(createOpenWikiThreadId(process.cwd()));
     const mountedRef = useRef(false);
@@ -95,6 +97,12 @@ function App({ command }) {
         setSessionProvider(provider);
         setSessionModelId(modelId);
     }
+    async function selectLanguage(language) {
+        await saveOpenWikiEnv({
+            [OPENWIKI_LANGUAGE_ENV_KEY]: language,
+        });
+        setSessionLanguage(language);
+    }
     useEffect(() => {
         mountedRef.current = true;
         return () => {
@@ -165,6 +173,7 @@ function App({ command }) {
         runOpenWikiAgent(resolvedCommand, process.cwd(), {
             debug: isDebugMode(),
             isFollowup: activeMessageIsFollowup,
+            language: sessionLanguage,
             modelId: sessionModelId,
             threadId: sessionThreadId.current,
             userMessage: activeUserMessage,
@@ -231,6 +240,7 @@ function App({ command }) {
         activeUserMessage,
         resolvedCommand,
         runState.status,
+        sessionLanguage,
         sessionModelId,
         sessionProvider,
         shouldRunInteractiveCredentialSetup,
@@ -253,7 +263,7 @@ function App({ command }) {
         return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: null, subtitle: "Command failed" }), _jsx(StatusLine, { tone: "error", label: "Error", value: command.message }), _jsx(HelpView, {})] }));
     }
     if (command.kind === "run" && command.dryRun) {
-        return (_jsx(DryRunView, { command: command.command, modelId: command.modelId, shouldStart: command.shouldStart, userMessage: command.userMessage }));
+        return (_jsx(DryRunView, { command: command.command, language: command.language, modelId: command.modelId, shouldStart: command.shouldStart, userMessage: command.userMessage }));
     }
     if (shouldRunInteractiveCredentialSetup) {
         return (_jsx(InitSetup, { modelIdOverride: command.modelId, onComplete: (result) => {
@@ -282,7 +292,7 @@ function App({ command }) {
         if (autoExitOnSuccess) {
             return (_jsx(RunView, { command: runState.result.command, credentialDiagnostics: runState.credentialDiagnostics, done: true, log: runState.log, message: activeUserMessage, modelId: runState.result.model }));
         }
-        return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: runState.result.model, subtitle: "Ready for follow-up" }), _jsx(ChatHistory, { runs: completedRuns }), _jsx(ChatInput, { currentModelId: getDisplayModelId(displayModelId), currentProvider: sessionProvider, onClear: clearSession, onCommandRun: submitCommandRun, onModelSelect: selectModel, onProviderSelect: selectProvider, onSubmit: submitChatMessage })] }));
+        return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: runState.result.model, subtitle: "Ready for follow-up" }), _jsx(ChatHistory, { runs: completedRuns }), _jsx(ChatInput, { currentLanguage: sessionLanguage, currentModelId: getDisplayModelId(displayModelId), currentProvider: sessionProvider, onClear: clearSession, onCommandRun: submitCommandRun, onLanguageSelect: selectLanguage, onModelSelect: selectModel, onProviderSelect: selectProvider, onSubmit: submitChatMessage })] }));
     }
     if (runState.status === "idle" && completedRuns.length > 0) {
         return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: displayModelId, subtitle: "Starting follow-up" }), _jsx(ChatHistory, { runs: completedRuns }), activeUserMessage ? _jsx(PromptBlock, { message: activeUserMessage }) : null, _jsx(StatusLine, { tone: "active", label: "Next", value: "starting openwiki" })] }));
@@ -290,16 +300,16 @@ function App({ command }) {
     if (runState.status === "error") {
         return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: displayModelId, subtitle: "Run failed" }), _jsx(StatusLine, { tone: "error", label: "Error", value: runState.message }), runState.credentialDiagnostics ? (_jsx(CredentialDiagnosticsPanel, { diagnostics: runState.credentialDiagnostics })) : null, runState.errorDiagnostics && runState.errorDiagnostics.length > 0 ? (_jsx(ErrorDiagnosticsPanel, { diagnostics: runState.errorDiagnostics })) : null] }));
     }
-    return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: displayModelId, subtitle: "Ready for chat" }), _jsx(ChatInput, { currentModelId: getDisplayModelId(displayModelId), currentProvider: sessionProvider, onClear: clearSession, onCommandRun: submitCommandRun, onModelSelect: selectModel, onProviderSelect: selectProvider, onSubmit: submitChatMessage })] }));
+    return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: displayModelId, subtitle: "Ready for chat" }), _jsx(ChatInput, { currentLanguage: sessionLanguage, currentModelId: getDisplayModelId(displayModelId), currentProvider: sessionProvider, onClear: clearSession, onCommandRun: submitCommandRun, onLanguageSelect: selectLanguage, onModelSelect: selectModel, onProviderSelect: selectProvider, onSubmit: submitChatMessage })] }));
 }
 function HelpView() {
     return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: null, subtitle: helpContent.description }), _jsx(Panel, { title: "Usage", children: helpContent.usage.map((line) => (_jsxs(Text, { children: [" ", line] }, line))) }), _jsx(Panel, { title: "Commands", children: _jsx(Rows, { rows: helpContent.commands }) }), _jsx(Panel, { title: "Options", children: _jsx(Rows, { rows: helpContent.options }) }), isDevelopmentMode() ? (_jsx(Panel, { title: "Development Options", children: _jsx(Rows, { rows: helpContent.developmentOptions }) })) : null, _jsxs(Panel, { title: "Examples", children: [helpContent.examples.map((line) => (_jsxs(Text, { children: [" ", line] }, line))), isDevelopmentMode()
                         ? helpContent.developmentExamples.map((line) => (_jsxs(Text, { children: [" ", line] }, line)))
                         : null] })] }));
 }
-function DryRunView({ command, modelId, shouldStart, userMessage, }) {
+function DryRunView({ command, language, modelId, shouldStart, userMessage, }) {
     return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: modelId, subtitle: "Development dry run" }), _jsxs(Panel, { title: "Execution Plan", children: [_jsx(StatusLine, { tone: "active", label: "Command", value: `openwiki ${command}` }), _jsx(StatusLine, { tone: "muted", label: "Mode", value: command }), _jsx(StatusLine, { tone: "muted", label: "Credentials", value: "not read or requested" }), _jsx(StatusLine, { tone: "muted", label: "Model", value: modelId ??
-                            `saved setting or ${getDefaultModelId(resolveConfiguredProvider())}` }), _jsx(StatusLine, { tone: "muted", label: "Agent", value: "not invoked" }), _jsx(StatusLine, { tone: "muted", label: "Writes", value: "no files or metadata" }), _jsx(StatusLine, { tone: "muted", label: "Output", value: `${OPEN_WIKI_DIR}/` }), _jsx(StatusLine, { tone: "muted", label: "Startup", value: shouldStart ? "would start run" : "would open chat" }), userMessage ? (_jsx(StatusLine, { tone: "muted", label: "Message", value: userMessage })) : null] })] }));
+                            `saved setting or ${getDefaultModelId(resolveConfiguredProvider())}` }), _jsx(StatusLine, { tone: "muted", label: "Language", value: language ?? "saved setting or repository default" }), _jsx(StatusLine, { tone: "muted", label: "Agent", value: "not invoked" }), _jsx(StatusLine, { tone: "muted", label: "Writes", value: "no files or metadata" }), _jsx(StatusLine, { tone: "muted", label: "Output", value: `${OPEN_WIKI_DIR}/` }), _jsx(StatusLine, { tone: "muted", label: "Startup", value: shouldStart ? "would start run" : "would open chat" }), userMessage ? (_jsx(StatusLine, { tone: "muted", label: "Message", value: userMessage })) : null] })] }));
 }
 function CredentialDiagnosticsPanel({ diagnostics, }) {
     return (_jsxs(Panel, { title: "Credential Diagnostics", children: [_jsx(Text, { color: "gray", children: "Raw secret values are intentionally not printed." }), diagnostics.map((diagnostic) => (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, children: diagnostic.key }), " ", _jsxs(Text, { color: "gray", children: ["source=", diagnostic.source] })] }), _jsxs(Text, { children: ["length=", diagnostic.length ?? "unset", " preview=", diagnostic.preview] }), _jsxs(Text, { color: diagnostic.warnings.length > 0 ? "yellow" : "gray", children: ["warnings=", diagnostic.warnings.length > 0
@@ -474,7 +484,7 @@ function ChatHistory({ runs }) {
     }
     return (_jsx(Box, { flexDirection: "column", children: runs.map((run) => (_jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [run.message ? _jsx(PromptBlock, { message: run.message }) : null, _jsxs(Text, { children: [_jsx(Text, { color: "green", children: "* " }), _jsx(Text, { bold: true, children: "Complete" }), " ", _jsxs(Text, { color: "gray", children: ["openwiki ", run.command, " - ", run.result.model] })] }), _jsx(Box, { flexDirection: "column", marginLeft: 2, marginTop: 1, children: run.log.length > 0 ? (run.log.map((item) => _jsx(RunLogLine, { item: item }, item.id))) : (_jsx(Text, { color: "gray", children: "No assistant output captured." })) })] }, run.id))) }));
 }
-function ChatInput({ currentModelId, currentProvider, onClear, onCommandRun, onModelSelect, onProviderSelect, onSubmit, }) {
+function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, onCommandRun, onLanguageSelect, onModelSelect, onProviderSelect, onSubmit, }) {
     const [inputState, setInputState] = useState({
         cursorPosition: 0,
         value: "",
@@ -612,6 +622,16 @@ function ChatInput({ currentModelId, currentProvider, onClear, onCommandRun, onM
             });
             return;
         }
+        if (option.id === "language") {
+            if (args && args.length > 0) {
+                await saveLanguageSelection(args);
+                return;
+            }
+            setError(null);
+            setNotice(`Current language: ${currentLanguage ?? "saved setting or repository default"}. Type /language <lang>, for example /language ko or /language en.`);
+            setInputValue("/language ");
+            return;
+        }
         if (option.id === "init" || option.id === "update") {
             resetInput();
             onCommandRun(option.id, args);
@@ -625,7 +645,7 @@ function ChatInput({ currentModelId, currentProvider, onClear, onCommandRun, onM
         }
         if (option.id === "help") {
             resetInput();
-            setNotice("Slash commands: /provider, /model, /init, /update, /clear, /help, /exit. Use arrows to select.");
+            setNotice("Slash commands: /provider, /model, /language, /init, /update, /clear, /help, /exit. Use arrows to select.");
             return;
         }
         resetInput();
@@ -663,6 +683,33 @@ function ChatInput({ currentModelId, currentProvider, onClear, onCommandRun, onM
             setError(saveError instanceof Error
                 ? saveError.message
                 : "Failed to save model selection.");
+        }
+        finally {
+            setIsSaving(false);
+        }
+    }
+    async function saveLanguageSelection(rawLanguage) {
+        if (/\s/.test(rawLanguage.trim())) {
+            setError("Enter a single language id, for example /language ko or /language en.");
+            return;
+        }
+        if (!isValidLanguage(rawLanguage)) {
+            setError("Enter a valid language, for example ko, en, or ja.");
+            return;
+        }
+        const language = normalizeLanguage(rawLanguage);
+        setIsSaving(true);
+        setError(null);
+        setNotice(null);
+        try {
+            await onLanguageSelect(language);
+            resetInput();
+            setNotice(`Documentation language set to ${language} for this session and saved as the default for new wikis. Existing wikis keep their recorded language until updated with this language.`);
+        }
+        catch (saveError) {
+            setError(saveError instanceof Error
+                ? saveError.message
+                : "Failed to save language selection.");
         }
         finally {
             setIsSaving(false);
@@ -724,6 +771,11 @@ const slashCommandOptions = [
         description: "Switch the current provider model",
         id: "model",
         label: "/model",
+    },
+    {
+        description: "Switch the wiki documentation language",
+        id: "language",
+        label: "/language",
     },
     {
         description: "Run an initial OpenWiki documentation pass",
@@ -1655,6 +1707,7 @@ async function runHeadlessCommand(command) {
         await runOpenWikiAgent(command.command, process.cwd(), {
             debug: debugMode,
             isFollowup: command.command === "chat",
+            language: command.language,
             modelId: command.modelId,
             threadId: createOpenWikiThreadId(process.cwd()),
             userMessage: command.userMessage,

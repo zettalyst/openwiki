@@ -38,6 +38,7 @@ cd /path/to/target/repo
 openwiki
 openwiki -p "Summarize what you can do"
 openwiki --modelId openai/gpt-5.5
+openwiki --init --language en
 openwiki "Please focus on API documentation"
 ```
 

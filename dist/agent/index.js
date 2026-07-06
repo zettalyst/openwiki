@@ -7,9 +7,9 @@ import { ChatOpenAI } from "@langchain/openai";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { createDeepAgent, GENERAL_PURPOSE_SUBAGENT, LocalShellBackend, } from "deepagents";
 import { loadOpenWikiEnv } from "../env.js";
-import { createSystemPrompt, createUserPrompt } from "./prompt.js";
-import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, ANTHROPIC_BASE_URL_ENV_KEY, ANTHROPIC_OAUTH_BETA_HEADER, anthropicModelSupportsAdaptiveReasoning, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderBaseUrlEnvKey, createProviderCredentialConfigurationError, getProviderCredentialRequirement, getProviderLabel, isValidModelId, normalizeModelId, OPENAI_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_BASE_URL_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPENROUTER_BASE_URL, OPENROUTER_FALLBACK_MODEL_IDS, OPENWIKI_MODEL_EFFORT_ENV_KEY, OPENWIKI_MODEL_ID_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, providerRequiresBaseUrl, resolveAnthropicModelEffort, resolveConfiguredProvider, resolveProviderCredential, resolveProviderBaseUrl, } from "../constants.js";
-import { createOpenWikiContentSnapshot, getUpdateNoopStatus, createRunContext, shouldCheckUpdateNoop, writeLastUpdateMetadata, } from "./utils.js";
+import { createSystemPrompt, createUserPrompt, } from "./prompt.js";
+import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, ANTHROPIC_BASE_URL_ENV_KEY, ANTHROPIC_OAUTH_BETA_HEADER, anthropicModelSupportsAdaptiveReasoning, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS, DEFAULT_WIKI_LANGUAGE, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderBaseUrlEnvKey, createProviderCredentialConfigurationError, getProviderCredentialRequirement, getProviderLabel, isValidLanguage, isValidModelId, normalizeLanguage, normalizeModelId, OPENAI_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_BASE_URL_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPENROUTER_BASE_URL, OPENROUTER_FALLBACK_MODEL_IDS, OPENWIKI_LANGUAGE_ENV_KEY, OPENWIKI_MODEL_EFFORT_ENV_KEY, OPENWIKI_MODEL_ID_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, providerRequiresBaseUrl, resolveAnthropicModelEffort, resolveConfiguredProvider, resolveProviderCredential, resolveProviderBaseUrl, } from "../constants.js";
+import { createOpenWikiContentSnapshot, getUpdateNoopStatus, createRunContext, isLanguageMigrationRequired, readLastUpdateMetadata, recordedWikiLanguage, shouldCheckUpdateNoop, writeLastUpdateMetadata, } from "./utils.js";
 import { createWriteTodosInputNormalizerMiddleware } from "./todo-normalizer.js";
 const DEFAULT_STREAM_INACTIVITY_TIMEOUT_MS = 600_000;
 const STREAM_INACTIVITY_TIMEOUT_ENV_KEY = "OPENWIKI_STREAM_INACTIVITY_TIMEOUT_MS";
@@ -22,7 +22,15 @@ export async function runOpenWikiAgent(command, cwd = process.cwd(), options = {
     await loadOpenWikiEnv();
     emitDebug(options, "env=loaded ~/.openwiki/.env");
     emitDebug(options, `env.afterLoad ${formatEnvironmentDebug()}`);
-    if (command === "update" && shouldCheckUpdateNoop(options)) {
+    const lastUpdate = await readLastUpdateMetadata(cwd);
+    const language = resolveLanguage(options, lastUpdate);
+    const isLanguageMigration = command === "update" && isLanguageMigrationRequired(lastUpdate, language);
+    emitDebug(options, `language=${language} migration=${isLanguageMigration}`);
+    const promptOptions = { language, isLanguageMigration };
+    if (command === "update" && isLanguageMigration) {
+        emitDebug(options, "update.noop=false reason=documentation language changed");
+    }
+    else if (command === "update" && shouldCheckUpdateNoop(options)) {
         const noopStatus = await getUpdateNoopStatus(cwd);
         if (noopStatus.shouldSkip) {
             const message = "No repository changes detected since the last OpenWiki update; skipping agent run.";
@@ -56,7 +64,7 @@ export async function runOpenWikiAgent(command, cwd = process.cwd(), options = {
     }
     const debugFetchCapture = installOpenRouterDebugFetch(options);
     try {
-        return await runOpenWikiAgentWithModelFallbacks(command, cwd, options, provider, modelId, debugFetchCapture);
+        return await runOpenWikiAgentWithModelFallbacks(command, cwd, options, provider, modelId, promptOptions, debugFetchCapture);
     }
     catch (error) {
         attachOpenRouterDebugInfo(error, debugFetchCapture.getLastFailure());
@@ -66,7 +74,7 @@ export async function runOpenWikiAgent(command, cwd = process.cwd(), options = {
         debugFetchCapture.restore();
     }
 }
-async function runOpenWikiAgentWithModelFallbacks(command, cwd, options, provider, modelId, debugFetchCapture) {
+async function runOpenWikiAgentWithModelFallbacks(command, cwd, options, provider, modelId, promptOptions, debugFetchCapture) {
     const modelAttempts = createModelRoute(provider, modelId);
     let lastError = null;
     for (const [attemptIndex, attemptModelId] of modelAttempts.entries()) {
@@ -76,7 +84,7 @@ async function runOpenWikiAgentWithModelFallbacks(command, cwd, options, provide
             emitDebug(options, `model.retry attempt=${attemptIndex + 1} model=${attemptModelId}`);
         }
         try {
-            return await runOpenWikiAgentCore(command, cwd, attemptOptions, provider, attemptModelId);
+            return await runOpenWikiAgentCore(command, cwd, attemptOptions, provider, attemptModelId, promptOptions);
         }
         catch (error) {
             const failure = debugFetchCapture.getLastFailure();
@@ -92,7 +100,7 @@ async function runOpenWikiAgentWithModelFallbacks(command, cwd, options, provide
         ? lastError
         : new Error("OpenWiki run failed after model fallback attempts.");
 }
-async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
+async function runOpenWikiAgentCore(command, cwd, options, provider, modelId, promptOptions) {
     const context = await createRunContext(command, cwd);
     emitDebug(options, "context=created");
     const openWikiSnapshotBefore = command === "chat" ? null : await createOpenWikiContentSnapshot(cwd);
@@ -124,14 +132,14 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
             timeout: 120,
             virtualMode: true,
         }),
-        systemPrompt: createSystemPrompt(command),
+        systemPrompt: createSystemPrompt(command, promptOptions),
     });
     emitDebug(options, "agent=created");
     const input = {
         messages: [
             {
                 role: "user",
-                content: createRunUserMessage(command, cwd, context, options),
+                content: createRunUserMessage(command, cwd, context, options, promptOptions),
             },
         ],
     };
@@ -153,9 +161,26 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
         timeoutMs: streamInactivityTimeoutMs,
     });
     emitDebug(options, "stream=completed");
-    if (command !== "chat" &&
-        openWikiSnapshotBefore !== (await createOpenWikiContentSnapshot(cwd))) {
-        await writeLastUpdateMetadata(command, cwd, modelId);
+    const language = promptOptions.language ?? DEFAULT_WIKI_LANGUAGE;
+    const openWikiChanged = command !== "chat" &&
+        openWikiSnapshotBefore !== (await createOpenWikiContentSnapshot(cwd));
+    // Record a changed language even when the wiki content is untouched, so the
+    // next update run does not re-enter migration mode forever.
+    const languageOutdated = command !== "chat" &&
+        isLanguageMigrationRequired(context.lastUpdate, language);
+    if (openWikiChanged || languageOutdated) {
+        if (languageOutdated && !openWikiChanged) {
+            // The agent finished a language change without touching any wiki file —
+            // either the wiki already matched the new language or the conversion was
+            // skipped. Surface it, because the language is recorded as done either
+            // way and a plain update will not retry the conversion.
+            options.onEvent?.({
+                type: "text",
+                text: `Recorded wiki language ${language} without content changes. If pages are still in the previous language, run openwiki --update with a message asking to convert the remaining pages.`,
+            });
+            emitDebug(options, "metadata.language=stamped openwiki=unchanged");
+        }
+        await writeLastUpdateMetadata(command, cwd, modelId, language);
         emitDebug(options, "metadata=written");
     }
     else {
@@ -179,12 +204,12 @@ function createAttemptOptions(options, attemptIndex) {
             : undefined,
     };
 }
-function createRunUserMessage(command, cwd, context, options) {
+function createRunUserMessage(command, cwd, context, options, promptOptions) {
     if (options.isFollowup === true && options.userMessage?.trim()) {
         return options.userMessage.trim();
     }
     return `
-${createUserPrompt(command, context, options.userMessage ?? null)}
+${createUserPrompt(command, context, options.userMessage ?? null, promptOptions)}
 
 Repository root:
 ${cwd}
@@ -344,6 +369,30 @@ function ensureProviderBaseUrl(provider) {
         const baseUrlEnvKey = getProviderBaseUrlEnvKey(provider) ?? "base URL";
         throw new Error(`${baseUrlEnvKey} is required to run OpenWiki with ${getProviderLabel(provider)}.`);
     }
+}
+export function resolveLanguage(options, lastUpdate) {
+    // The repository's recorded language outranks the global env default so an
+    // existing wiki keeps its language on plain runs; an explicit flag outranks
+    // both. Wikis recorded before the language field existed resolve to English
+    // here, so a language migration only starts from an explicit request.
+    const languageCandidates = [
+        ["run options", options.language],
+        ["repository update metadata", recordedWikiLanguage(lastUpdate)],
+        [OPENWIKI_LANGUAGE_ENV_KEY, process.env[OPENWIKI_LANGUAGE_ENV_KEY]],
+    ];
+    for (const [source, rawLanguage] of languageCandidates) {
+        if (rawLanguage === null || rawLanguage === undefined) {
+            continue;
+        }
+        if (rawLanguage.trim().length === 0) {
+            continue;
+        }
+        if (!isValidLanguage(rawLanguage)) {
+            throw new Error(`Invalid documentation language from ${source}: ${rawLanguage}`);
+        }
+        return normalizeLanguage(rawLanguage);
+    }
+    return DEFAULT_WIKI_LANGUAGE;
 }
 function resolveModelId(options, provider) {
     const rawModelId = options.modelId ??

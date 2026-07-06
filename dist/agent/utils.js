@@ -3,13 +3,15 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { OPEN_WIKI_DIR, UPDATE_METADATA_PATH } from "../constants.js";
+import { isValidLanguage, normalizeLanguage, OPEN_WIKI_DIR, UPDATE_METADATA_PATH, } from "../constants.js";
 const execFileAsync = promisify(execFile);
+// Wikis recorded before the language field existed were generated in English.
+const LEGACY_WIKI_LANGUAGE = "en";
 /**
  * Builds the per-run context the prompt uses to reason about prior docs and git changes.
  */
 export async function createRunContext(command, cwd) {
-    const lastUpdate = await readLastUpdate(cwd);
+    const lastUpdate = await readLastUpdateMetadata(cwd);
     if (command === "chat") {
         return {
             lastUpdate,
@@ -22,7 +24,7 @@ export async function createRunContext(command, cwd) {
     };
 }
 export async function getUpdateNoopStatus(cwd) {
-    const lastUpdate = await readLastUpdate(cwd);
+    const lastUpdate = await readLastUpdateMetadata(cwd);
     if (!lastUpdate?.gitHead) {
         return { shouldSkip: false, reason: "missing previous update git head" };
     }
@@ -60,15 +62,35 @@ export function shouldCheckUpdateNoop(options) {
     return !options.userMessage?.trim();
 }
 /**
+ * Language the existing wiki was written in, or null when no run has been
+ * recorded yet.
+ */
+export function recordedWikiLanguage(lastUpdate) {
+    if (lastUpdate === null) {
+        return null;
+    }
+    return normalizeLanguage(lastUpdate.language ?? LEGACY_WIKI_LANGUAGE);
+}
+/**
+ * True when the wiki recorded by the previous run is in a different language
+ * than the one requested now, so the update must convert existing pages.
+ */
+export function isLanguageMigrationRequired(lastUpdate, language) {
+    const recordedLanguage = recordedWikiLanguage(lastUpdate);
+    return (recordedLanguage !== null &&
+        recordedLanguage !== normalizeLanguage(language));
+}
+/**
  * Records a successful init/update run so future updates can diff from this git head.
  */
-export async function writeLastUpdateMetadata(command, cwd, modelId) {
+export async function writeLastUpdateMetadata(command, cwd, modelId, language) {
     const metadataFile = path.join(cwd, UPDATE_METADATA_PATH);
     const metadata = {
         updatedAt: new Date().toISOString(),
         command,
         gitHead: await getGitHead(cwd),
         model: modelId,
+        language: normalizeLanguage(language),
     };
     await mkdir(path.dirname(metadataFile), { recursive: true });
     await writeFile(metadataFile, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
@@ -85,7 +107,7 @@ export async function createOpenWikiContentSnapshot(cwd) {
 /**
  * Reads prior run metadata if it exists and is structurally valid.
  */
-async function readLastUpdate(cwd) {
+export async function readLastUpdateMetadata(cwd) {
     const metadataFile = path.join(cwd, UPDATE_METADATA_PATH);
     try {
         const rawMetadata = await readFile(metadataFile, "utf8");
@@ -100,6 +122,10 @@ async function readLastUpdate(cwd) {
                     ? parsedMetadata.gitHead
                     : undefined,
                 model: parsedMetadata.model,
+                language: typeof parsedMetadata.language === "string" &&
+                    isValidLanguage(parsedMetadata.language)
+                    ? normalizeLanguage(parsedMetadata.language)
+                    : undefined,
             };
         }
         return null;

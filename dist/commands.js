@@ -1,9 +1,10 @@
-import { isValidModelId, normalizeModelId } from "./constants.js";
+import { isValidLanguage, isValidModelId, normalizeLanguage, normalizeModelId, } from "./constants.js";
 export function parseCommand(argv) {
     if (argv[0] === "--help" || argv[0] === "-h") {
         return { kind: "help", exitCode: 0 };
     }
     let dryRun = false;
+    let language = null;
     let modelId = null;
     let print = false;
     let command = "chat";
@@ -74,6 +75,38 @@ export function parseCommand(argv) {
             modelId = parsedModelId;
             continue;
         }
+        if (arg === "--language" || arg === "--lang") {
+            const nextArg = argv[index + 1];
+            if (!nextArg || nextArg.startsWith("-")) {
+                return {
+                    kind: "error",
+                    exitCode: 1,
+                    message: `${arg} requires a language.`,
+                };
+            }
+            if (!isValidLanguage(nextArg)) {
+                return {
+                    kind: "error",
+                    exitCode: 1,
+                    message: `Invalid language: ${nextArg}`,
+                };
+            }
+            language = normalizeLanguage(nextArg);
+            index += 1;
+            continue;
+        }
+        if (arg.startsWith("--language=") || arg.startsWith("--lang=")) {
+            const rawLanguage = arg.slice(arg.indexOf("=") + 1);
+            if (!isValidLanguage(rawLanguage)) {
+                return {
+                    kind: "error",
+                    exitCode: 1,
+                    message: `Invalid language: ${rawLanguage}`,
+                };
+            }
+            language = normalizeLanguage(rawLanguage);
+            continue;
+        }
         if (arg.startsWith("-")) {
             return {
                 kind: "error",
@@ -97,6 +130,7 @@ export function parseCommand(argv) {
         exitCode: 0,
         command,
         dryRun,
+        language,
         modelId,
         print,
         shouldStart,
@@ -138,6 +172,10 @@ export const helpContent = {
             label: "--modelId <id>",
             description: "Use a model ID for this run.",
         },
+        {
+            label: "--language <lang>",
+            description: "Write wiki documentation in this language (default: ko / Korean).",
+        },
     ],
     developmentOptions: [
         {
@@ -152,6 +190,7 @@ export const helpContent = {
         'openwiki "What can you do?"',
         'openwiki -p "Summarize what OpenWiki can do"',
         "openwiki --modelId gpt-5.5",
+        "openwiki --init --language en",
         'openwiki --update --modelId gpt-5.5 "Please document the API routes first"',
     ],
     developmentExamples: ["openwiki --dry-run"],

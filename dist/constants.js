@@ -16,6 +16,8 @@ export const OPENROUTER_API_KEY_ENV_KEY = "OPENROUTER_API_KEY";
 export const OPENWIKI_PROVIDER_ENV_KEY = "OPENWIKI_PROVIDER";
 export const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
 export const OPENWIKI_MODEL_EFFORT_ENV_KEY = "OPENWIKI_MODEL_EFFORT";
+export const OPENWIKI_LANGUAGE_ENV_KEY = "OPENWIKI_LANGUAGE";
+export const DEFAULT_WIKI_LANGUAGE = "ko";
 export const DEFAULT_PROVIDER = "openrouter";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const SELECTABLE_OPENWIKI_PROVIDERS = [
@@ -336,6 +338,54 @@ function matchesAnthropicModelIdPrefix(modelId, prefixes) {
     return prefixes.some((prefix) => normalized === prefix ||
         normalized.startsWith(`${prefix}-`) ||
         normalized.startsWith(`${prefix}@`));
+}
+const LANGUAGE_ALIASES = {
+    ko: "ko",
+    kor: "ko",
+    korean: "ko",
+    한국어: "ko",
+    한글: "ko",
+    en: "en",
+    eng: "en",
+    english: "en",
+    영어: "en",
+    ja: "ja",
+    jpn: "ja",
+    japanese: "ja",
+    日本語: "ja",
+    일본어: "ja",
+    zh: "zh",
+    chinese: "zh",
+    中文: "zh",
+    중국어: "zh",
+};
+const LANGUAGE_PROMPT_LABELS = {
+    ko: "Korean (한국어)",
+    en: "English",
+    ja: "Japanese (日本語)",
+    zh: "Chinese (中文)",
+};
+/**
+ * Canonicalizes language input so "ko", "Korean", and "한국어" compare equal in
+ * run options, env configuration, and update metadata.
+ */
+export function normalizeLanguage(value) {
+    const trimmed = value.trim().toLowerCase();
+    return LANGUAGE_ALIASES[trimmed] ?? trimmed;
+}
+export function isValidLanguage(value) {
+    const language = normalizeLanguage(value);
+    return (language.length > 0 &&
+        language.length <= 60 &&
+        /^[\p{L}\p{N}][\p{L}\p{N} _()-]*$/u.test(language));
+}
+/**
+ * Human-readable language name used inside model prompts. Unknown values pass
+ * through so free-form languages still work.
+ */
+export function formatLanguageForPrompt(value) {
+    const language = normalizeLanguage(value);
+    return LANGUAGE_PROMPT_LABELS[language] ?? language;
 }
 export function normalizeModelId(value) {
     return value.trim();

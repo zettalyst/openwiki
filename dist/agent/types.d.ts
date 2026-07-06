@@ -26,6 +26,7 @@ export type OpenWikiRunEvent = {
 export type OpenWikiRunOptions = {
     debug?: boolean;
     isFollowup?: boolean;
+    language?: string | null;
     modelId?: string | null;
     onEvent?: (event: OpenWikiRunEvent) => void;
     streamInactivityTimeoutMs?: number | null;
@@ -37,6 +38,7 @@ export type UpdateMetadata = {
     command: OpenWikiCommand;
     gitHead?: string;
     model: string;
+    language?: string;
 };
 export type RunContext = {
     lastUpdate: UpdateMetadata | null;

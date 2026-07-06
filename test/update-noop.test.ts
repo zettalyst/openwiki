@@ -6,7 +6,10 @@ import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import {
   getUpdateNoopStatus,
+  isLanguageMigrationRequired,
+  readLastUpdateMetadata,
   shouldCheckUpdateNoop,
+  writeLastUpdateMetadata,
 } from "../src/agent/utils.ts";
 
 const execFileAsync = promisify(execFile);
@@ -104,6 +107,45 @@ describe("getUpdateNoopStatus", () => {
     const status = await getUpdateNoopStatus(repo);
 
     expect(status.shouldSkip).toBe(false);
+  });
+});
+
+describe("isLanguageMigrationRequired", () => {
+  const baseMetadata = {
+    updatedAt: new Date().toISOString(),
+    command: "update" as const,
+    model: "test-model",
+  };
+
+  test("does not require migration without previous metadata", () => {
+    expect(isLanguageMigrationRequired(null, "ko")).toBe(false);
+  });
+
+  test("treats metadata without a language field as an English wiki", () => {
+    expect(isLanguageMigrationRequired(baseMetadata, "ko")).toBe(true);
+    expect(isLanguageMigrationRequired(baseMetadata, "en")).toBe(false);
+  });
+
+  test("compares languages after normalization", () => {
+    const koreanWiki = { ...baseMetadata, language: "ko" };
+
+    expect(isLanguageMigrationRequired(koreanWiki, "korean")).toBe(false);
+    expect(isLanguageMigrationRequired(koreanWiki, "한국어")).toBe(false);
+    expect(isLanguageMigrationRequired(koreanWiki, "en")).toBe(true);
+  });
+});
+
+describe("update metadata language round trip", () => {
+  test("records and reads back the normalized wiki language", async () => {
+    const repo = await createRepoWithOpenWiki();
+
+    await writeLastUpdateMetadata("update", repo, "test-model", "Korean");
+
+    const metadata = await readLastUpdateMetadata(repo);
+
+    expect(metadata?.language).toBe("ko");
+    expect(isLanguageMigrationRequired(metadata, "ko")).toBe(false);
+    expect(isLanguageMigrationRequired(metadata, "en")).toBe(true);
   });
 });
 

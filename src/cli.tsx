@@ -37,10 +37,13 @@ import {
   getProviderCredentialRequirement,
   getProviderLabel,
   getProviderModelOptions,
+  isValidLanguage,
   isValidModelId,
+  normalizeLanguage,
   normalizeModelId,
   normalizeProvider,
   OPENAI_API_KEY_ENV_KEY,
+  OPENWIKI_LANGUAGE_ENV_KEY,
   OPENWIKI_PROVIDER_ENV_KEY,
   OPENWIKI_MODEL_ID_ENV_KEY,
   OPENROUTER_API_KEY_ENV_KEY,
@@ -123,12 +126,16 @@ const OPENWIKI_LOGO_WIDTH = Math.max(
 function App({ command }: AppProps) {
   const app = useApp();
   const startupModelId = command.kind === "run" ? command.modelId : null;
+  const startupLanguage = command.kind === "run" ? command.language : null;
   const startupProvider = resolveConfiguredProvider();
   const autoExitOnSuccess = shouldAutoExitStartupRun(command);
   const [sessionProvider, setSessionProvider] =
     useState<OpenWikiProvider>(startupProvider);
   const [sessionModelId, setSessionModelId] = useState<string | null>(
     startupModelId,
+  );
+  const [sessionLanguage, setSessionLanguage] = useState<string | null>(
+    startupLanguage,
   );
   const activeRunId = useRef(0);
   const sessionThreadId = useRef(createOpenWikiThreadId(process.cwd()));
@@ -222,6 +229,13 @@ function App({ command }: AppProps) {
     });
     setSessionProvider(provider);
     setSessionModelId(modelId);
+  }
+
+  async function selectLanguage(language: string) {
+    await saveOpenWikiEnv({
+      [OPENWIKI_LANGUAGE_ENV_KEY]: language,
+    });
+    setSessionLanguage(language);
   }
 
   useEffect(() => {
@@ -322,6 +336,7 @@ function App({ command }: AppProps) {
     runOpenWikiAgent(resolvedCommand, process.cwd(), {
       debug: isDebugMode(),
       isFollowup: activeMessageIsFollowup,
+      language: sessionLanguage,
       modelId: sessionModelId,
       threadId: sessionThreadId.current,
       userMessage: activeUserMessage,
@@ -399,6 +414,7 @@ function App({ command }: AppProps) {
     activeUserMessage,
     resolvedCommand,
     runState.status,
+    sessionLanguage,
     sessionModelId,
     sessionProvider,
     shouldRunInteractiveCredentialSetup,
@@ -435,6 +451,7 @@ function App({ command }: AppProps) {
     return (
       <DryRunView
         command={command.command}
+        language={command.language}
         modelId={command.modelId}
         shouldStart={command.shouldStart}
         userMessage={command.userMessage}
@@ -533,10 +550,12 @@ function App({ command }: AppProps) {
         />
         <ChatHistory runs={completedRuns} />
         <ChatInput
+          currentLanguage={sessionLanguage}
           currentModelId={getDisplayModelId(displayModelId)}
           currentProvider={sessionProvider}
           onClear={clearSession}
           onCommandRun={submitCommandRun}
+          onLanguageSelect={selectLanguage}
           onModelSelect={selectModel}
           onProviderSelect={selectProvider}
           onSubmit={submitChatMessage}
@@ -577,10 +596,12 @@ function App({ command }: AppProps) {
     <Box flexDirection="column">
       <Header modelId={displayModelId} subtitle="Ready for chat" />
       <ChatInput
+        currentLanguage={sessionLanguage}
         currentModelId={getDisplayModelId(displayModelId)}
         currentProvider={sessionProvider}
         onClear={clearSession}
         onCommandRun={submitCommandRun}
+        onLanguageSelect={selectLanguage}
         onModelSelect={selectModel}
         onProviderSelect={selectProvider}
         onSubmit={submitChatMessage}
@@ -630,11 +651,13 @@ function HelpView() {
 
 function DryRunView({
   command,
+  language,
   modelId,
   shouldStart,
   userMessage,
 }: {
   command: OpenWikiCommand;
+  language: string | null;
   modelId: string | null;
   shouldStart: boolean;
   userMessage: string | null;
@@ -661,6 +684,11 @@ function DryRunView({
             modelId ??
             `saved setting or ${getDefaultModelId(resolveConfiguredProvider())}`
           }
+        />
+        <StatusLine
+          tone="muted"
+          label="Language"
+          value={language ?? "saved setting or repository default"}
         />
         <StatusLine tone="muted" label="Agent" value="not invoked" />
         <StatusLine tone="muted" label="Writes" value="no files or metadata" />
@@ -1237,6 +1265,7 @@ function ChatHistory({ runs }: { runs: CompletedRun[] }) {
 }
 
 type ChatInputProps = {
+  currentLanguage: string | null;
   currentModelId: string;
   currentProvider: OpenWikiProvider;
   onClear: () => void;
@@ -1244,16 +1273,19 @@ type ChatInputProps = {
     command: Extract<OpenWikiCommand, "init" | "update">,
     message: string | null,
   ) => void;
+  onLanguageSelect: (language: string) => Promise<void>;
   onModelSelect: (modelId: string) => Promise<void>;
   onProviderSelect: (provider: OpenWikiProvider) => Promise<void>;
   onSubmit: (message: string) => void;
 };
 
 function ChatInput({
+  currentLanguage,
   currentModelId,
   currentProvider,
   onClear,
   onCommandRun,
+  onLanguageSelect,
   onModelSelect,
   onProviderSelect,
   onSubmit,
@@ -1446,6 +1478,20 @@ function ChatInput({
       return;
     }
 
+    if (option.id === "language") {
+      if (args && args.length > 0) {
+        await saveLanguageSelection(args);
+        return;
+      }
+
+      setError(null);
+      setNotice(
+        `Current language: ${currentLanguage ?? "saved setting or repository default"}. Type /language <lang>, for example /language ko or /language en.`,
+      );
+      setInputValue("/language ");
+      return;
+    }
+
     if (option.id === "init" || option.id === "update") {
       resetInput();
       onCommandRun(option.id, args);
@@ -1462,7 +1508,7 @@ function ChatInput({
     if (option.id === "help") {
       resetInput();
       setNotice(
-        "Slash commands: /provider, /model, /init, /update, /clear, /help, /exit. Use arrows to select.",
+        "Slash commands: /provider, /model, /language, /init, /update, /clear, /help, /exit. Use arrows to select.",
       );
       return;
     }
@@ -1512,6 +1558,42 @@ function ChatInput({
         saveError instanceof Error
           ? saveError.message
           : "Failed to save model selection.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function saveLanguageSelection(rawLanguage: string) {
+    if (/\s/.test(rawLanguage.trim())) {
+      setError(
+        "Enter a single language id, for example /language ko or /language en.",
+      );
+      return;
+    }
+
+    if (!isValidLanguage(rawLanguage)) {
+      setError("Enter a valid language, for example ko, en, or ja.");
+      return;
+    }
+
+    const language = normalizeLanguage(rawLanguage);
+
+    setIsSaving(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      await onLanguageSelect(language);
+      resetInput();
+      setNotice(
+        `Documentation language set to ${language} for this session and saved as the default for new wikis. Existing wikis keep their recorded language until updated with this language.`,
+      );
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Failed to save language selection.",
       );
     } finally {
       setIsSaving(false);
@@ -1634,6 +1716,7 @@ type SlashCommandId =
   | "exit"
   | "help"
   | "init"
+  | "language"
   | "model"
   | "provider"
   | "update";
@@ -1665,6 +1748,11 @@ const slashCommandOptions: SlashCommandOption[] = [
     description: "Switch the current provider model",
     id: "model",
     label: "/model",
+  },
+  {
+    description: "Switch the wiki documentation language",
+    id: "language",
+    label: "/language",
   },
   {
     description: "Run an initial OpenWiki documentation pass",
@@ -3154,6 +3242,7 @@ async function runHeadlessCommand(
     await runOpenWikiAgent(command.command, process.cwd(), {
       debug: debugMode,
       isFollowup: command.command === "chat",
+      language: command.language,
       modelId: command.modelId,
       threadId: createOpenWikiThreadId(process.cwd()),
       userMessage: command.userMessage,

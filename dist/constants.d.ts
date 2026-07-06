@@ -15,6 +15,8 @@ export declare const OPENROUTER_API_KEY_ENV_KEY = "OPENROUTER_API_KEY";
 export declare const OPENWIKI_PROVIDER_ENV_KEY = "OPENWIKI_PROVIDER";
 export declare const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
 export declare const OPENWIKI_MODEL_EFFORT_ENV_KEY = "OPENWIKI_MODEL_EFFORT";
+export declare const OPENWIKI_LANGUAGE_ENV_KEY = "OPENWIKI_LANGUAGE";
+export declare const DEFAULT_WIKI_LANGUAGE = "ko";
 export declare const DEFAULT_PROVIDER = "openrouter";
 export declare const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export type OpenWikiProvider = "anthropic" | "baseten" | "fireworks" | "openai" | "openai-compatible" | "openrouter";
@@ -92,6 +94,17 @@ export declare function anthropicModelSupportsAdaptiveReasoning(modelId: string)
 export declare function resolveAnthropicModelEffort(modelId: string, env?: NodeJS.ProcessEnv): AnthropicModelEffort | null;
 export declare function isAnthropicModelEffort(value: string): value is AnthropicModelEffort;
 export declare function isValidModelEffortSetting(value: string): boolean;
+/**
+ * Canonicalizes language input so "ko", "Korean", and "한국어" compare equal in
+ * run options, env configuration, and update metadata.
+ */
+export declare function normalizeLanguage(value: string): string;
+export declare function isValidLanguage(value: string): boolean;
+/**
+ * Human-readable language name used inside model prompts. Unknown values pass
+ * through so free-form languages still work.
+ */
+export declare function formatLanguageForPrompt(value: string): string;
 export declare function normalizeModelId(value: string): string;
 export declare function isValidModelId(value: string): boolean;
 export declare const OPENWIKI_VERSION = "0.0.1";

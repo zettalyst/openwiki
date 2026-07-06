@@ -21,6 +21,7 @@ export type CliCommand = {
     exitCode: 0;
     command: OpenWikiCommand;
     dryRun: boolean;
+    language: string | null;
     modelId: string | null;
     print: boolean;
     shouldStart: boolean;

@@ -60,6 +60,12 @@ Update existing documentation:
 openwiki --update
 ```
 
+Choose the documentation language for a run:
+
+```sh
+openwiki --init --language en
+```
+
 Show help:
 
 ```sh
@@ -77,6 +83,25 @@ These configuration options and secrets will be saved to `~/.openwiki/.env` on y
 ## Customizing
 
 OpenWiki supports OpenRouter, Fireworks, Baseten, OpenAI, an OpenAI-compatible provider, and Anthropic out of the box. By default, there are a few models pre-defined (GLM 5.2, Kimi K2.6, Sonnet 5, etc) but for each inference provider, OpenWiki will allow you to specify your own custom model ID.
+
+### Documentation language
+
+OpenWiki writes wiki documentation in Korean (한국어) by default. The language
+is resolved in this order: the `--language` flag (or the `/language` slash
+command in chat), the language recorded in `openwiki/.last-update.json` for the
+repository, the `OPENWIKI_LANGUAGE` environment variable (including
+`~/.openwiki/.env`), and finally the built-in default `ko`. Common aliases are
+normalized (`korean`/`한국어` → `ko`, `english` → `en`, and so on); other
+values pass through as free-form language names.
+
+Because the repository's recorded language outranks `OPENWIKI_LANGUAGE`, an
+existing wiki keeps its language on plain `--update` runs even if the global
+default changes. Passing `--language` explicitly for an update run whose wiki
+was recorded in a different language triggers a language migration run that
+rewrites every wiki page in the requested language. Wikis generated before this
+option existed are treated as English. Code identifiers, commands, file names,
+and the OpenWiki reference section in `AGENTS.md`/`CLAUDE.md` always stay in
+their original English form.
 
 ### Provider selection
 
