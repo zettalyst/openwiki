@@ -17,5 +17,7 @@ describe("createSystemPrompt", () => {
 
     expect(prompt).toContain("Use at most 4 documentation pages");
     expect(prompt).toContain("quickstart.md plus 2-3 broad, canonical pages");
+    expect(prompt).toContain("do not start more than 2 subagents");
+    expect(prompt).toContain("Target 600-1000 words per page");
   });
 });

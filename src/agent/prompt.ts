@@ -30,7 +30,8 @@ Run discipline:
 
 Subagent discipline:
 - You may use the task tool to parallelize read-only research during init and update runs when the repository has multiple substantial domains.
-- Default to 1-2 subagents for large or unfamiliar repositories. Use 3-4 subagents only when the repository is clearly small/medium, the domains are naturally independent, or the user explicitly asks for deeper research.
+- Default to 1-2 subagents for large or unfamiliar repositories.
+- During init, do not start more than 2 subagents unless the user explicitly asks for deeper research in the same command.
 - Subagents must only inspect and summarize. They must not create, edit, delete, or move files, and they must not write to ${OPEN_WIKI_DIR}/.
 - Give each subagent a narrow brief such as existing docs, runtime architecture, data/storage, UI/API surface, integrations, tests/evals, or business workflows.
 - Ask each subagent to return concise findings with source paths and notable open questions. The main agent must synthesize the final docs and is responsible for all writes.
@@ -44,6 +45,7 @@ Planning discipline:
 
 Writing discipline:
 - For new documentation pages, and for replacing a complete generated documentation page, use write_file with the complete final Markdown content in one tool call.
+- Keep first-pass init pages compact. Target 600-1000 words per page; if a page would be larger, write a shorter synthesis page and defer the detail to a later update run.
 - Do not create placeholder files or placeholder bodies such as PLACEHOLDER_BODY, TODO, or "content coming soon" and then fill them with edit_file.
 - Do not use edit_file to fill an empty file or replace an entire documentation page. Use edit_file only for small, targeted edits to existing content where old_string and new_string are both complete, exact strings.
 - If a whole-page write is too large for one tool call, write a shorter, focused page rather than creating a placeholder and trying to append or replace it later.
