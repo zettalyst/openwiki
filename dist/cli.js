@@ -1612,8 +1612,8 @@ if (shouldPrintStartupError(argv, parsedCommand, command)) {
     process.stderr.write(`${command.message}\n`);
     process.exitCode = command.exitCode;
 }
-else if (command.kind === "run" && command.print && !command.dryRun) {
-    await runPrintCommand(command);
+else if (shouldRunHeadlessCommand(command)) {
+    await runHeadlessCommand(command);
 }
 else {
     render(_jsx(App, { command: command }));
@@ -1634,7 +1634,13 @@ function shouldAutoExitStartupRun(command) {
         command.shouldStart &&
         (command.command === "init" || command.command === "update"));
 }
-async function runPrintCommand(command) {
+function shouldRunHeadlessCommand(command) {
+    return (command.kind === "run" &&
+        !command.dryRun &&
+        command.shouldStart &&
+        (command.print || !process.stdin.isTTY));
+}
+async function runHeadlessCommand(command) {
     try {
         const output = [];
         await runOpenWikiAgent(command.command, process.cwd(), {

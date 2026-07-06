@@ -3090,8 +3090,8 @@ const command = resolveStartupCommand(parsedCommand);
 if (shouldPrintStartupError(argv, parsedCommand, command)) {
   process.stderr.write(`${command.message}\n`);
   process.exitCode = command.exitCode;
-} else if (command.kind === "run" && command.print && !command.dryRun) {
-  await runPrintCommand(command);
+} else if (shouldRunHeadlessCommand(command)) {
+  await runHeadlessCommand(command);
 } else {
   render(<App command={command} />);
 }
@@ -3123,7 +3123,18 @@ function shouldAutoExitStartupRun(command: CliCommand): boolean {
   );
 }
 
-async function runPrintCommand(
+function shouldRunHeadlessCommand(
+  command: CliCommand,
+): command is Extract<CliCommand, { kind: "run" }> {
+  return (
+    command.kind === "run" &&
+    !command.dryRun &&
+    command.shouldStart &&
+    (command.print || !process.stdin.isTTY)
+  );
+}
+
+async function runHeadlessCommand(
   command: Extract<CliCommand, { kind: "run" }>,
 ): Promise<void> {
   try {
