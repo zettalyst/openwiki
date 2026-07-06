@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
+import Anthropic, { type ClientOptions } from "@anthropic-ai/sdk";
+import type { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
+import type { ChatModelStreamEvent } from "@langchain/core/language_models/event";
+import { type BaseMessage, SystemMessage } from "@langchain/core/messages";
+import type { ChatGenerationChunk, ChatResult } from "@langchain/core/outputs";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAI } from "@langchain/openai";
@@ -16,12 +21,17 @@ import type {
 } from "./types.js";
 import {
   ANTHROPIC_API_KEY_ENV_KEY,
+  ANTHROPIC_AUTH_TOKEN_ENV_KEY,
   ANTHROPIC_BASE_URL_ENV_KEY,
+  ANTHROPIC_OAUTH_BETA_HEADER,
   BASETEN_API_KEY_ENV_KEY,
+  CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT,
+  CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
   FIREWORKS_API_KEY_ENV_KEY,
   getDefaultModelId,
-  getProviderApiKeyEnvKey,
   getProviderBaseUrlEnvKey,
+  createProviderCredentialConfigurationError,
+  getProviderCredentialRequirement,
   getProviderLabel,
   isValidModelId,
   normalizeModelId,
@@ -35,8 +45,10 @@ import {
   OPENWIKI_PROVIDER_ENV_KEY,
   providerRequiresBaseUrl,
   resolveConfiguredProvider,
+  resolveProviderCredential,
   resolveProviderBaseUrl,
   type OpenWikiProvider,
+  type ProviderCredential,
 } from "../constants.js";
 import {
   createOpenWikiContentSnapshot,
@@ -91,8 +103,11 @@ export async function runOpenWikiAgent(
   if (providerBaseUrl) {
     emitDebug(options, `provider.baseUrl=${JSON.stringify(providerBaseUrl)}`);
   }
-  ensureProviderKey(provider);
-  emitDebug(options, `credentials=${provider} key present`);
+  const providerCredential = ensureProviderKey(provider);
+  emitDebug(
+    options,
+    `credentials=${provider} env=${providerCredential.envKey} type=${providerCredential.type}`,
+  );
   ensureProviderBaseUrl(provider);
   const modelId = resolveModelId(options, provider);
   emitDebug(options, `model=${modelId}`);
@@ -375,14 +390,22 @@ function isFileNotFoundError(error: unknown): boolean {
   );
 }
 
-function ensureProviderKey(provider: OpenWikiProvider): void {
-  const apiKeyEnvKey = getProviderApiKeyEnvKey(provider);
+function ensureProviderKey(provider: OpenWikiProvider): ProviderCredential {
+  const credentialError = createProviderCredentialConfigurationError(provider);
 
-  if (!process.env[apiKeyEnvKey]) {
+  if (credentialError !== null) {
+    throw new Error(credentialError);
+  }
+
+  const credential = resolveProviderCredential(provider);
+
+  if (credential === null) {
     throw new Error(
-      `${apiKeyEnvKey} is required to run OpenWiki with ${getProviderLabel(provider)}.`,
+      `${getProviderCredentialRequirement(provider)} is required to run OpenWiki with ${getProviderLabel(provider)}.`,
     );
   }
+
+  return credential;
 }
 
 function ensureProviderBaseUrl(provider: OpenWikiProvider): void {
@@ -418,12 +441,46 @@ function resolveModelId(
   return modelId;
 }
 
-async function createModel(provider: OpenWikiProvider, modelId: string) {
+export async function createModel(provider: OpenWikiProvider, modelId: string) {
+  const credentialError = createProviderCredentialConfigurationError(provider);
+
+  if (credentialError !== null) {
+    throw new Error(credentialError);
+  }
+
+  const credential = resolveProviderCredential(provider);
+
+  if (credential === null) {
+    throw new Error(
+      `${getProviderCredentialRequirement(provider)} is required.`,
+    );
+  }
+
   if (provider === "anthropic") {
     const baseURL = resolveProviderBaseUrl(provider);
 
+    if (credential.type === "auth-token") {
+      const AnthropicChatModel =
+        credential.envKey === CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY
+          ? ChatAnthropicWithClaudeCodeOAuthBilling
+          : ChatAnthropic;
+
+      return new AnthropicChatModel(modelId, {
+        createClient: (options: ClientOptions) =>
+          new Anthropic({
+            ...options,
+            apiKey: null,
+            authToken: credential.value,
+            defaultHeaders: appendAnthropicOAuthBetaHeader(
+              options.defaultHeaders,
+            ),
+          }),
+        ...(baseURL ? { anthropicApiUrl: baseURL } : {}),
+      });
+    }
+
     return new ChatAnthropic(modelId, {
-      apiKey: process.env[getProviderApiKeyEnvKey(provider)],
+      apiKey: credential.value,
       ...(baseURL ? { anthropicApiUrl: baseURL } : {}),
     });
   }
@@ -432,7 +489,7 @@ async function createModel(provider: OpenWikiProvider, modelId: string) {
     const models = createModelRoute(provider, modelId);
 
     return new ChatOpenRouter({
-      apiKey: process.env[OPENROUTER_API_KEY_ENV_KEY],
+      apiKey: credential.value,
       baseURL: OPENROUTER_BASE_URL,
       model: modelId,
       models,
@@ -444,7 +501,7 @@ async function createModel(provider: OpenWikiProvider, modelId: string) {
   const baseURL = resolveProviderBaseUrl(provider);
 
   return new ChatOpenAI({
-    apiKey: process.env[getProviderApiKeyEnvKey(provider)],
+    apiKey: credential.value,
     configuration: baseURL
       ? {
           baseURL,
@@ -452,6 +509,130 @@ async function createModel(provider: OpenWikiProvider, modelId: string) {
       : undefined,
     model: modelId,
   });
+}
+
+class ChatAnthropicWithClaudeCodeOAuthBilling extends ChatAnthropic {
+  async _generate(
+    messages: BaseMessage[],
+    options: this["ParsedCallOptions"],
+    runManager?: CallbackManagerForLLMRun,
+  ): Promise<ChatResult> {
+    return super._generate(
+      prependClaudeCodeOAuthBillingSystemMessage(messages),
+      options,
+      runManager,
+    );
+  }
+
+  async *_streamResponseChunks(
+    messages: BaseMessage[],
+    options: this["ParsedCallOptions"],
+    runManager?: CallbackManagerForLLMRun,
+  ): AsyncGenerator<ChatGenerationChunk> {
+    yield* super._streamResponseChunks(
+      prependClaudeCodeOAuthBillingSystemMessage(messages),
+      options,
+      runManager,
+    );
+  }
+
+  async *_streamChatModelEvents(
+    messages: BaseMessage[],
+    options: this["ParsedCallOptions"],
+    runManager?: CallbackManagerForLLMRun,
+  ): AsyncGenerator<ChatModelStreamEvent> {
+    yield* super._streamChatModelEvents(
+      prependClaudeCodeOAuthBillingSystemMessage(messages),
+      options,
+      runManager,
+    );
+  }
+}
+
+function prependClaudeCodeOAuthBillingSystemMessage(
+  messages: BaseMessage[],
+): BaseMessage[] {
+  if (messages[0]?._getType() === "system") {
+    if (systemContentIncludesClaudeCodeOAuthBilling(messages[0].content)) {
+      return messages;
+    }
+
+    const [systemMessage, ...rest] = messages;
+    const content =
+      typeof systemMessage.content === "string"
+        ? [
+            {
+              type: "text" as const,
+              text: systemMessage.content,
+            },
+          ]
+        : systemMessage.content;
+
+    return [
+      new SystemMessage({
+        id: systemMessage.id,
+        name: systemMessage.name,
+        additional_kwargs: systemMessage.additional_kwargs,
+        response_metadata: systemMessage.response_metadata,
+        content: [createClaudeCodeOAuthBillingBlock(), ...content],
+      }),
+      ...rest,
+    ];
+  }
+
+  return [
+    new SystemMessage({
+      content: [createClaudeCodeOAuthBillingBlock()],
+    }),
+    ...messages,
+  ];
+}
+
+function systemContentIncludesClaudeCodeOAuthBilling(
+  content: BaseMessage["content"],
+): boolean {
+  if (typeof content === "string") {
+    return content.includes(CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT);
+  }
+
+  return content.some((block) => {
+    if (block.type !== "text") {
+      return false;
+    }
+
+    return (
+      "text" in block && block.text === CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT
+    );
+  });
+}
+
+function createClaudeCodeOAuthBillingBlock(): {
+  type: "text";
+  text: string;
+} {
+  return {
+    type: "text",
+    text: CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT,
+  };
+}
+
+function appendAnthropicOAuthBetaHeader(
+  defaultHeaders: ClientOptions["defaultHeaders"],
+): ClientOptions["defaultHeaders"] {
+  type HeadersConstructorInput = ConstructorParameters<typeof Headers>[0];
+  const headers = new Headers(
+    (defaultHeaders ?? undefined) as HeadersConstructorInput,
+  );
+  const existingBetaHeaders = headers
+    .get("anthropic-beta")
+    ?.split(",")
+    .map((value) => value.trim());
+
+  if (!existingBetaHeaders?.includes(ANTHROPIC_OAUTH_BETA_HEADER)) {
+    headers.append("anthropic-beta", ANTHROPIC_OAUTH_BETA_HEADER);
+  }
+
+  return headers;
 }
 
 function createModelRoute(
@@ -1308,8 +1489,10 @@ function formatEnvironmentDebug(): string {
     OPENAI_API_KEY_ENV_KEY,
     OPENAI_COMPATIBLE_API_KEY_ENV_KEY,
     OPENAI_COMPATIBLE_BASE_URL_ENV_KEY,
+    ANTHROPIC_AUTH_TOKEN_ENV_KEY,
     ANTHROPIC_API_KEY_ENV_KEY,
     ANTHROPIC_BASE_URL_ENV_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
     OPENROUTER_API_KEY_ENV_KEY,
     OPENWIKI_MODEL_ID_ENV_KEY,
     "LANGCHAIN_TRACING_V2",
@@ -1335,7 +1518,7 @@ function formatDebugValue(key: string, value: string | undefined): string {
     return formatUrlDebugValue(value);
   }
 
-  if (key.endsWith("_API_KEY")) {
+  if (isSecretDebugKey(key)) {
     return `set(length=${value.length})`;
   }
 
@@ -1350,6 +1533,14 @@ function formatDebugValue(key: string, value: string | undefined): string {
   return `set(length=${value.length}, preview=${JSON.stringify(
     `${value.slice(0, 6)}...${value.slice(-4)}`,
   )})`;
+}
+
+function isSecretDebugKey(key: string): boolean {
+  return (
+    key.endsWith("_API_KEY") ||
+    key === ANTHROPIC_AUTH_TOKEN_ENV_KEY ||
+    key === CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY
+  );
 }
 
 function formatUrlDebugValue(value: string): string {

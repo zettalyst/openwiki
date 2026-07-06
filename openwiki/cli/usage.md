@@ -57,14 +57,14 @@ If a LangSmith key is provided, onboarding also enables `LANGCHAIN_PROJECT=openw
 
 Providers and their model options are defined in `PROVIDER_CONFIGS` in `src/constants.ts`:
 
-| Provider          | Env key                     | Base URL                                | Models                                                                |
-| ----------------- | --------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
-| openrouter        | `OPENROUTER_API_KEY`        | `https://openrouter.ai/api/v1`          | GLM 5.2, Fusion, Kimi K2.7 Code, Claude Opus/Sonnet, GPT 5.4 mini/5.5 |
-| baseten           | `BASETEN_API_KEY`           | `https://inference.baseten.co/v1`       | GLM 5.2, Kimi K2.7 Code                                               |
-| fireworks         | `FIREWORKS_API_KEY`         | `https://api.fireworks.ai/inference/v1` | GLM 5.2, Kimi K2.7 Code                                               |
-| openai            | `OPENAI_API_KEY`            | (default)                               | GPT 5.4 mini, GPT 5.5                                                 |
-| openai-compatible | `OPENAI_COMPATIBLE_API_KEY` | `OPENAI_COMPATIBLE_BASE_URL` (required) | custom model ID only                                                  |
-| anthropic         | `ANTHROPIC_API_KEY`         | (default, or `ANTHROPIC_BASE_URL`)      | Haiku, Sonnet, Opus                                                   |
+| Provider          | Env key                                                                   | Base URL                                | Models                                                                |
+| ----------------- | ------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| openrouter        | `OPENROUTER_API_KEY`                                                      | `https://openrouter.ai/api/v1`          | GLM 5.2, Fusion, Kimi K2.7 Code, Claude Opus/Sonnet, GPT 5.4 mini/5.5 |
+| baseten           | `BASETEN_API_KEY`                                                         | `https://inference.baseten.co/v1`       | GLM 5.2, Kimi K2.7 Code                                               |
+| fireworks         | `FIREWORKS_API_KEY`                                                       | `https://api.fireworks.ai/inference/v1` | GLM 5.2, Kimi K2.7 Code                                               |
+| openai            | `OPENAI_API_KEY`                                                          | (default)                               | GPT 5.4 mini, GPT 5.5                                                 |
+| openai-compatible | `OPENAI_COMPATIBLE_API_KEY`                                               | `OPENAI_COMPATIBLE_BASE_URL` (required) | custom model ID only                                                  |
+| anthropic         | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | (default, or `ANTHROPIC_BASE_URL`)      | Haiku, Sonnet, Opus                                                   |
 
 The default provider is `openrouter`. `resolveConfiguredProvider()` picks the provider from `OPENWIKI_PROVIDER`, falling back to openrouter if `OPENROUTER_API_KEY` is set, then to `DEFAULT_PROVIDER`.
 
@@ -73,8 +73,27 @@ The default provider is `openrouter`. `resolveConfiguredProvider()` picks the pr
 Set `ANTHROPIC_BASE_URL` to route the anthropic provider at an alternative,
 Anthropic-compatible endpoint (for example a self-hosted or proxied gateway)
 instead of the default API. When set, it is passed to `ChatAnthropic` as
-`anthropicApiUrl`; the `ANTHROPIC_API_KEY` is still sent as the request
-credential.
+`anthropicApiUrl`; the resolved Anthropic credential is still sent as the
+request credential.
+
+Anthropic credential priority is `ANTHROPIC_AUTH_TOKEN`, then
+`ANTHROPIC_API_KEY`, then `CLAUDE_CODE_OAUTH_TOKEN`. Bearer-token credentials
+are sent as `Authorization: Bearer ...` with `anthropic-beta:
+oauth-2025-04-20`. `CLAUDE_CODE_OAUTH_TOKEN` also adds an OpenWiki-identified
+Claude Code billing system block, which is required for subscription-routed
+Sonnet requests. `ANTHROPIC_API_KEY` is reserved for Anthropic Console API keys;
+place Claude Code OAuth tokens in `ANTHROPIC_AUTH_TOKEN` or
+`CLAUDE_CODE_OAUTH_TOKEN`.
+
+To smoke-test a Claude Code OAuth token generated with `claude setup-token`:
+
+```bash
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+export OPENWIKI_PROVIDER=anthropic
+export OPENWIKI_MODEL_ID=claude-sonnet-5
+export CLAUDE_CODE_OAUTH_TOKEN='...'
+pnpm exec tsx src/cli.tsx -p "Return exactly OK."
+```
 
 ### OpenAI-compatible provider
 

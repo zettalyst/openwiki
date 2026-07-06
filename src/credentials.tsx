@@ -5,6 +5,7 @@ import {
   getDefaultModelId,
   getProviderApiKeyEnvKey,
   getProviderBaseUrlEnvKey,
+  getProviderCredentialRequirement,
   getProviderLabel,
   getProviderModelOptions,
   isValidBaseUrl,
@@ -15,6 +16,7 @@ import {
   type OpenWikiProvider,
   providerRequiresBaseUrl,
   resolveConfiguredProvider,
+  resolveProviderCredential,
   SELECTABLE_OPENWIKI_PROVIDERS,
 } from "./constants.js";
 import { openWikiEnvPath, saveOpenWikiEnv } from "./env.js";
@@ -41,11 +43,10 @@ export function needsCredentialSetup(
   modelIdOverride: string | null = null,
 ): boolean {
   const provider = resolveConfiguredProvider();
-  const apiKeyEnvKey = getProviderApiKeyEnvKey(provider);
 
   return (
     process.env[OPENWIKI_PROVIDER_ENV_KEY] === undefined ||
-    !process.env[apiKeyEnvKey] ||
+    resolveProviderCredential(provider) === null ||
     needsBaseUrlStep(provider) ||
     (modelIdOverride === null &&
       process.env[OPENWIKI_MODEL_ID_ENV_KEY] === undefined) ||
@@ -437,6 +438,9 @@ export function InitSetup({
   }
 
   const needsCredentialPrompt = needsCredentialSetup(modelIdOverride);
+  const providerCredential = resolveProviderCredential(provider);
+  const providerCredentialRequirement =
+    getProviderCredentialRequirement(provider);
 
   return (
     <Box flexDirection="column">
@@ -455,18 +459,18 @@ export function InitSetup({
           detail={getProviderSetupDetail(provider)}
         />
         <SetupStep
-          label="Provider key"
+          label="Provider credential"
           state={
-            process.env[getProviderApiKeyEnvKey(provider)]
+            providerCredential !== null
               ? "done"
               : step === "api-key"
                 ? "current"
                 : "pending"
           }
           detail={
-            process.env[getProviderApiKeyEnvKey(provider)]
-              ? "available from environment"
-              : `save ${getProviderApiKeyEnvKey(provider)} to ${openWikiEnvPath}`
+            providerCredential !== null
+              ? `available from ${providerCredential.envKey}`
+              : `save ${providerCredentialRequirement} to ${openWikiEnvPath}`
           }
         />
         {providerRequiresBaseUrl(provider) ? (
@@ -654,6 +658,12 @@ function Prompt({
     return (
       <Box flexDirection="column">
         <Text>Paste your {getProviderLabel(provider)} API key.</Text>
+        {provider === "anthropic" ? (
+          <Text color="gray">
+            For bearer OAuth, set ANTHROPIC_AUTH_TOKEN or
+            CLAUDE_CODE_OAUTH_TOKEN before starting OpenWiki.
+          </Text>
+        ) : null}
         <Text>
           <Text color="gray">$</Text> {getProviderApiKeyEnvKey(provider)}={" "}
           <Text color="yellow">{mask(input)}</Text>
@@ -750,7 +760,7 @@ function getInitialStep(
     return "provider";
   }
 
-  if (!process.env[getProviderApiKeyEnvKey(provider)]) {
+  if (resolveProviderCredential(provider) === null) {
     return "api-key";
   }
 
@@ -776,7 +786,7 @@ function getNextStepAfterProvider(
   provider: OpenWikiProvider,
   modelIdOverride: string | null,
 ): PromptStep | null {
-  if (!process.env[getProviderApiKeyEnvKey(provider)]) {
+  if (resolveProviderCredential(provider) === null) {
     return "api-key";
   }
 

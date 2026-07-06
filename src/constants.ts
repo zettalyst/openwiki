@@ -6,7 +6,13 @@ export const OPENAI_API_KEY_ENV_KEY = "OPENAI_API_KEY";
 export const OPENAI_COMPATIBLE_API_KEY_ENV_KEY = "OPENAI_COMPATIBLE_API_KEY";
 export const OPENAI_COMPATIBLE_BASE_URL_ENV_KEY = "OPENAI_COMPATIBLE_BASE_URL";
 export const ANTHROPIC_API_KEY_ENV_KEY = "ANTHROPIC_API_KEY";
+export const ANTHROPIC_AUTH_TOKEN_ENV_KEY = "ANTHROPIC_AUTH_TOKEN";
 export const ANTHROPIC_BASE_URL_ENV_KEY = "ANTHROPIC_BASE_URL";
+export const CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
+export const ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20";
+export const CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT =
+  "x-anthropic-billing-header: cc_version=openwiki; cc_entrypoint=openwiki;";
+const ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat";
 export const OPENROUTER_API_KEY_ENV_KEY = "OPENROUTER_API_KEY";
 export const OPENWIKI_PROVIDER_ENV_KEY = "OPENWIKI_PROVIDER";
 export const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
@@ -26,6 +32,12 @@ export type SelectableOpenWikiProvider = OpenWikiProvider;
 export type ProviderModelOption = {
   id: string;
   label: string;
+};
+
+export type ProviderCredential = {
+  envKey: string;
+  type: "api-key" | "auth-token";
+  value: string;
 };
 
 type ProviderConfig = {
@@ -141,6 +153,121 @@ export function getProviderApiKeyEnvKey(provider: OpenWikiProvider): string {
   return getProviderConfig(provider).apiKeyEnvKey;
 }
 
+export function getProviderCredentialEnvKeys(
+  provider: OpenWikiProvider,
+): string[] {
+  if (provider === "anthropic") {
+    return [
+      ANTHROPIC_AUTH_TOKEN_ENV_KEY,
+      ANTHROPIC_API_KEY_ENV_KEY,
+      CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
+    ];
+  }
+
+  return [getProviderApiKeyEnvKey(provider)];
+}
+
+export function getProviderCredentialRequirement(
+  provider: OpenWikiProvider,
+): string {
+  const keys = getProviderCredentialEnvKeys(provider);
+
+  if (keys.length === 1) {
+    return keys[0];
+  }
+
+  return `${keys.slice(0, -1).join(", ")}, or ${keys[keys.length - 1]}`;
+}
+
+export function createProviderCredentialRequiredMessage(
+  provider: OpenWikiProvider,
+  mode: "interactive" | "non-interactive",
+): string {
+  const requirement = getProviderCredentialRequirement(provider);
+
+  if (mode === "non-interactive") {
+    return `${requirement} is required for non-interactive runs. Run openwiki in an interactive terminal to save credentials.`;
+  }
+
+  return `${requirement} is required. Run openwiki in an interactive terminal to save credentials.`;
+}
+
+export function createProviderCredentialConfigurationError(
+  provider: OpenWikiProvider,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (provider !== "anthropic") {
+    return null;
+  }
+
+  if (getNonEmptyEnvValue(env, ANTHROPIC_AUTH_TOKEN_ENV_KEY) !== null) {
+    return null;
+  }
+
+  const apiKey = getNonEmptyEnvValue(env, ANTHROPIC_API_KEY_ENV_KEY);
+
+  if (apiKey === null || !isAnthropicOAuthToken(apiKey)) {
+    return null;
+  }
+
+  return `${ANTHROPIC_API_KEY_ENV_KEY} appears to contain an Anthropic OAuth token. Move it to ${ANTHROPIC_AUTH_TOKEN_ENV_KEY} or ${CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY}, or replace ${ANTHROPIC_API_KEY_ENV_KEY} with an Anthropic Console API key.`;
+}
+
+export function resolveProviderCredential(
+  provider: OpenWikiProvider,
+  env: NodeJS.ProcessEnv = process.env,
+): ProviderCredential | null {
+  if (provider === "anthropic") {
+    const authToken = getNonEmptyEnvValue(env, ANTHROPIC_AUTH_TOKEN_ENV_KEY);
+
+    if (authToken !== null) {
+      return {
+        envKey: ANTHROPIC_AUTH_TOKEN_ENV_KEY,
+        type: "auth-token",
+        value: authToken,
+      };
+    }
+
+    const apiKey = getNonEmptyEnvValue(env, ANTHROPIC_API_KEY_ENV_KEY);
+
+    if (apiKey !== null) {
+      return {
+        envKey: ANTHROPIC_API_KEY_ENV_KEY,
+        type: "api-key",
+        value: apiKey,
+      };
+    }
+
+    const claudeCodeOAuthToken = getNonEmptyEnvValue(
+      env,
+      CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
+    );
+
+    if (claudeCodeOAuthToken !== null) {
+      return {
+        envKey: CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
+        type: "auth-token",
+        value: claudeCodeOAuthToken,
+      };
+    }
+
+    return null;
+  }
+
+  const apiKeyEnvKey = getProviderApiKeyEnvKey(provider);
+  const apiKey = getNonEmptyEnvValue(env, apiKeyEnvKey);
+
+  if (apiKey === null) {
+    return null;
+  }
+
+  return {
+    envKey: apiKeyEnvKey,
+    type: "api-key",
+    value: apiKey,
+  };
+}
+
 /**
  * Resolves the base URL for a provider, preferring an alternative base URL from
  * the provider's configured environment variable over the built-in default.
@@ -221,6 +348,19 @@ export function resolveConfiguredProvider(
     normalizeProvider(env[OPENWIKI_PROVIDER_ENV_KEY]) ??
     (env[OPENROUTER_API_KEY_ENV_KEY] ? "openrouter" : DEFAULT_PROVIDER)
   );
+}
+
+function getNonEmptyEnvValue(
+  env: NodeJS.ProcessEnv,
+  key: string,
+): string | null {
+  const value = env[key];
+
+  return value !== undefined && value.length > 0 ? value : null;
+}
+
+function isAnthropicOAuthToken(value: string): boolean {
+  return value.trim().startsWith(ANTHROPIC_OAUTH_TOKEN_PREFIX);
 }
 
 export function normalizeModelId(value: string): string {

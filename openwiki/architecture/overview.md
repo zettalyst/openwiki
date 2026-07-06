@@ -40,7 +40,7 @@ The agent runtime resolves the provider via `resolveConfiguredProvider()` in `sr
 
 Model creation branches by provider in `src/agent/index.ts` (`createModel`):
 
-- **anthropic** → `ChatAnthropic` with the Anthropic API key.
+- **anthropic** → `ChatAnthropic` with an Anthropic API key or an injected Anthropic SDK client for bearer tokens (`ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`). `CLAUDE_CODE_OAUTH_TOKEN` also uses a `ChatAnthropic` subclass that prepends the OpenWiki Claude Code billing system block required for subscription-routed Sonnet requests.
 - **openrouter** → `ChatOpenRouter` with `route: "fallback"` and a list of fallback models.
 - **baseten / fireworks / openai** → `ChatOpenAI` with the provider's API key and optional custom `baseURL` from `PROVIDER_CONFIGS`.
 

@@ -27,10 +27,14 @@ import {
 } from "./agent/types.js";
 import {
   ANTHROPIC_API_KEY_ENV_KEY,
+  ANTHROPIC_AUTH_TOKEN_ENV_KEY,
   BASETEN_API_KEY_ENV_KEY,
+  CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
+  createProviderCredentialConfigurationError,
+  createProviderCredentialRequiredMessage,
   FIREWORKS_API_KEY_ENV_KEY,
   getDefaultModelId,
-  getProviderApiKeyEnvKey,
+  getProviderCredentialRequirement,
   getProviderLabel,
   getProviderModelOptions,
   isValidModelId,
@@ -42,6 +46,7 @@ import {
   OPENROUTER_API_KEY_ENV_KEY,
   OPEN_WIKI_DIR,
   resolveConfiguredProvider,
+  resolveProviderCredential,
   SELECTABLE_OPENWIKI_PROVIDERS,
   OPENWIKI_VERSION,
   type OpenWikiProvider,
@@ -239,12 +244,26 @@ function App({ command }: AppProps) {
       return;
     }
 
-    const apiKeyEnvKey = getProviderApiKeyEnvKey(sessionProvider);
+    const providerCredentialError =
+      createProviderCredentialConfigurationError(sessionProvider);
 
-    if (!process.env[apiKeyEnvKey] && !process.stdin.isTTY) {
+    if (providerCredentialError !== null) {
       setRunState({
         status: "error",
-        message: `${apiKeyEnvKey} is required. Run openwiki in an interactive terminal to save credentials.`,
+        message: providerCredentialError,
+      });
+      return;
+    }
+
+    const providerCredential = resolveProviderCredential(sessionProvider);
+
+    if (providerCredential === null && !process.stdin.isTTY) {
+      setRunState({
+        status: "error",
+        message: createProviderCredentialRequiredMessage(
+          sessionProvider,
+          "interactive",
+        ),
       });
       return;
     }
@@ -687,8 +706,7 @@ function ErrorDiagnosticsPanel({
   return (
     <Panel title="Error Diagnostics">
       <Text color="gray">
-        OPENWIKI_DEBUG=1 is enabled. Only allowlisted, non-secret error fields
-        are shown.
+        Only allowlisted, non-secret error fields are shown.
       </Text>
       {diagnostics.map((diagnostic) => (
         <Text key={diagnostic.label}>
@@ -1522,7 +1540,7 @@ function ChatInput({
       setNotice(
         `Provider switched to ${getProviderLabel(provider)} with model ${getDefaultModelId(
           provider,
-        )}. Ensure ${getProviderApiKeyEnvKey(provider)} is set.`,
+        )}. Ensure ${getProviderCredentialRequirement(provider)} is set.`,
       );
     } catch (saveError) {
       setError(
@@ -2598,6 +2616,8 @@ function getErrorDiagnostics(error: unknown): ErrorDiagnostic[] {
   const diagnostics: ErrorDiagnostic[] = [];
   const debugMode = isDebugMode();
 
+  addRuntimeDiagnostics(diagnostics);
+
   if (debugMode && error instanceof Error) {
     diagnostics.push(
       { label: "name", value: error.name },
@@ -2629,6 +2649,42 @@ function getErrorDiagnostics(error: unknown): ErrorDiagnostic[] {
   }
 
   return dedupeDiagnostics(diagnostics);
+}
+
+function addRuntimeDiagnostics(diagnostics: ErrorDiagnostic[]): void {
+  try {
+    const provider = resolveConfiguredProvider();
+    const credential = resolveProviderCredential(provider);
+
+    diagnostics.push({
+      label: "provider",
+      value: provider,
+    });
+    diagnostics.push({
+      label: "model",
+      value:
+        process.env[OPENWIKI_MODEL_ID_ENV_KEY] ?? getDefaultModelId(provider),
+    });
+
+    if (credential === null) {
+      diagnostics.push({
+        label: "credential",
+        value: "missing",
+      });
+      return;
+    }
+
+    diagnostics.push({
+      label: "credential.env",
+      value: credential.envKey,
+    });
+    diagnostics.push({
+      label: "credential.type",
+      value: credential.type,
+    });
+  } catch {
+    // Error diagnostics must never mask the original failure.
+  }
 }
 
 function addSafeNestedDiagnostics(
@@ -2925,6 +2981,8 @@ function sanitizeDiagnosticText(value: string): string {
     FIREWORKS_API_KEY_ENV_KEY,
     OPENAI_API_KEY_ENV_KEY,
     ANTHROPIC_API_KEY_ENV_KEY,
+    ANTHROPIC_AUTH_TOKEN_ENV_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
     OPENROUTER_API_KEY_ENV_KEY,
     "LANGSMITH_API_KEY",
   ]) {
@@ -3120,14 +3178,27 @@ function resolveStartupCommand(command: CliCommand): CliCommand {
     (command.print || !process.stdin.isTTY)
   ) {
     const provider = resolveConfiguredProvider();
-    const apiKeyEnvKey = getProviderApiKeyEnvKey(provider);
-    const hasProviderKey = Boolean(process.env[apiKeyEnvKey]);
+    const providerCredentialError =
+      createProviderCredentialConfigurationError(provider);
 
-    if (!hasProviderKey) {
+    if (providerCredentialError !== null) {
       return {
         kind: "error",
         exitCode: 1,
-        message: `${apiKeyEnvKey} is required for non-interactive runs. Run openwiki in an interactive terminal to save credentials.`,
+        message: providerCredentialError,
+      };
+    }
+
+    const providerCredential = resolveProviderCredential(provider);
+
+    if (providerCredential === null) {
+      return {
+        kind: "error",
+        exitCode: 1,
+        message: createProviderCredentialRequiredMessage(
+          provider,
+          "non-interactive",
+        ),
       };
     }
   }

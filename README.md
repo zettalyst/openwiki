@@ -64,7 +64,7 @@ openwiki --help
 
 `openwiki` will automatically append prompting to your `AGENTS.md` and/or `CLAUDE.md` files to instruct your coding agent to reference it when searching for context. If the file does not already exist in your repository, OpenWiki will create it for you.
 
-On the first interactive run, OpenWiki will have you configure your inference provider, API key, and LLM. You will also be able to set a LangSmith API key to trace your OpenWiki runs to a LangSmith tracing project named "openwiki" (optional).
+On the first interactive run, OpenWiki will have you configure your inference provider, provider credential, and LLM. You will also be able to set a LangSmith API key to trace your OpenWiki runs to a LangSmith tracing project named "openwiki" (optional).
 
 These configuration options and secrets will be saved to `~/.openwiki/.env` on your local machine.
 
@@ -82,6 +82,25 @@ To route the Anthropic provider at an alternative, Anthropic-compatible endpoint
 OPENWIKI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your-key
 ANTHROPIC_BASE_URL=https://your-gateway.example.com/anthropic
+```
+
+The Anthropic provider can also use bearer credentials. `ANTHROPIC_AUTH_TOKEN`
+takes priority over `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_OAUTH_TOKEN` is used
+as a fallback when neither Anthropic credential is set. Bearer requests include
+the OAuth beta header. When the credential comes from `CLAUDE_CODE_OAUTH_TOKEN`,
+OpenWiki also prepends an OpenWiki-identified Claude Code billing system block
+so Sonnet-class requests are routed through the Claude Code subscription path.
+Do not put a Claude Code OAuth token in `ANTHROPIC_API_KEY`; that env var is for
+Anthropic Console API keys only.
+
+To smoke-test a Claude Code OAuth token generated with `claude setup-token`:
+
+```bash
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+export OPENWIKI_PROVIDER=anthropic
+export OPENWIKI_MODEL_ID=claude-sonnet-5
+export CLAUDE_CODE_OAUTH_TOKEN='...'
+pnpm exec tsx src/cli.tsx -p "Return exactly OK."
 ```
 
 ### OpenAI-compatible endpoints
