@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   createProviderCredentialConfigurationError,
   createProviderCredentialRequiredMessage,
+  resolveConfiguredProvider,
   resolveProviderCredential,
 } from "../src/constants.ts";
 
@@ -91,6 +92,69 @@ describe("createProviderCredentialConfigurationError", () => {
         ANTHROPIC_API_KEY: "sk-ant-oat01-misplaced-oauth-token",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveConfiguredProvider", () => {
+  test("honors an explicit OPENWIKI_PROVIDER over detected credentials", () => {
+    expect(
+      resolveConfiguredProvider({
+        OPENWIKI_PROVIDER: "openai",
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
+      }),
+    ).toBe("openai");
+  });
+
+  test("keeps preferring OpenRouter when its API key is present", () => {
+    expect(
+      resolveConfiguredProvider({
+        OPENROUTER_API_KEY: "openrouter-api-key",
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
+      }),
+    ).toBe("openrouter");
+  });
+
+  test("falls back to Anthropic when only CLAUDE_CODE_OAUTH_TOKEN is set", () => {
+    expect(
+      resolveConfiguredProvider({
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
+      }),
+    ).toBe("anthropic");
+  });
+
+  test("falls back to Anthropic for ANTHROPIC_AUTH_TOKEN-only environments", () => {
+    expect(
+      resolveConfiguredProvider({
+        ANTHROPIC_AUTH_TOKEN: "anthropic-auth-token",
+      }),
+    ).toBe("anthropic");
+  });
+
+  test("detects providers with a single API key credential", () => {
+    expect(
+      resolveConfiguredProvider({
+        OPENAI_API_KEY: "openai-api-key",
+      }),
+    ).toBe("openai");
+  });
+
+  test("skips openai-compatible detection without a base URL", () => {
+    expect(
+      resolveConfiguredProvider({
+        OPENAI_COMPATIBLE_API_KEY: "openai-compatible-api-key",
+      }),
+    ).toBe("openrouter");
+
+    expect(
+      resolveConfiguredProvider({
+        OPENAI_COMPATIBLE_API_KEY: "openai-compatible-api-key",
+        OPENAI_COMPATIBLE_BASE_URL: "https://gateway.example.com/v1",
+      }),
+    ).toBe("openai-compatible");
+  });
+
+  test("defaults to OpenRouter when no credentials are present", () => {
+    expect(resolveConfiguredProvider({})).toBe("openrouter");
   });
 });
 

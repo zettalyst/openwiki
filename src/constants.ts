@@ -344,10 +344,31 @@ export function isValidProvider(value: string): value is OpenWikiProvider {
 export function resolveConfiguredProvider(
   env: NodeJS.ProcessEnv = process.env,
 ): OpenWikiProvider {
-  return (
-    normalizeProvider(env[OPENWIKI_PROVIDER_ENV_KEY]) ??
-    (env[OPENROUTER_API_KEY_ENV_KEY] ? "openrouter" : DEFAULT_PROVIDER)
-  );
+  const configuredProvider = normalizeProvider(env[OPENWIKI_PROVIDER_ENV_KEY]);
+
+  if (configuredProvider !== null) {
+    return configuredProvider;
+  }
+
+  // Without an explicit provider setting, fall back to the first selectable
+  // provider whose credentials are already present, so single-credential
+  // environments (e.g. only CLAUDE_CODE_OAUTH_TOKEN) work without extra setup.
+  for (const provider of SELECTABLE_OPENWIKI_PROVIDERS) {
+    if (resolveProviderCredential(provider, env) === null) {
+      continue;
+    }
+
+    if (
+      providerRequiresBaseUrl(provider) &&
+      resolveProviderBaseUrl(provider, env) === undefined
+    ) {
+      continue;
+    }
+
+    return provider;
+  }
+
+  return DEFAULT_PROVIDER;
 }
 
 function getNonEmptyEnvValue(
