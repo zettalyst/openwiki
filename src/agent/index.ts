@@ -371,14 +371,18 @@ export async function consumeOpenWikiAgentStream(
 ): Promise<void> {
   const iterator = stream[Symbol.asyncIterator]();
   let unhandledChunkCount = 0;
-  let lastActivity = "stream start";
+  let lastProgressActivity = "stream start";
+  let lastRawActivity = "stream start";
+  let lastProgressAt = Date.now();
 
   try {
     while (true) {
       const next = await nextStreamChunkWithInactivityTimeout(
         iterator,
         context,
-        lastActivity,
+        lastProgressActivity,
+        lastRawActivity,
+        lastProgressAt,
       );
 
       if (next.done) {
@@ -388,15 +392,17 @@ export async function consumeOpenWikiAgentStream(
       const event = parseStreamEvent(next.value);
 
       if (event) {
-        lastActivity = formatStreamActivity(event);
+        lastProgressActivity = formatStreamActivity(event);
+        lastRawActivity = lastProgressActivity;
+        lastProgressAt = Date.now();
         options.onEvent?.(event);
       } else {
-        lastActivity = `unhandled chunk: ${describeStreamChunkShape(
+        lastRawActivity = `unhandled chunk: ${describeStreamChunkShape(
           next.value,
         )}`;
 
         if (options.debug && unhandledChunkCount < 3) {
-          emitDebug(options, `stream.unhandledChunk ${lastActivity}`);
+          emitDebug(options, `stream.unhandledChunk ${lastRawActivity}`);
           unhandledChunkCount += 1;
         }
       }
@@ -415,10 +421,23 @@ export async function consumeOpenWikiAgentStream(
 async function nextStreamChunkWithInactivityTimeout(
   iterator: AsyncIterator<unknown>,
   context: StreamInactivityContext,
-  lastActivity: string,
+  lastProgressActivity: string,
+  lastRawActivity: string,
+  lastProgressAt: number,
 ): Promise<IteratorResult<unknown>> {
   if (context.timeoutMs <= 0) {
     return iterator.next();
+  }
+
+  const remainingMs =
+    context.timeoutMs - Math.max(0, Date.now() - lastProgressAt);
+
+  if (remainingMs <= 0) {
+    throw createStreamInactivityTimeoutError(
+      context,
+      lastProgressActivity,
+      lastRawActivity,
+    );
   }
 
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -428,8 +447,14 @@ async function nextStreamChunkWithInactivityTimeout(
       iterator.next(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(createStreamInactivityTimeoutError(context, lastActivity));
-        }, context.timeoutMs);
+          reject(
+            createStreamInactivityTimeoutError(
+              context,
+              lastProgressActivity,
+              lastRawActivity,
+            ),
+          );
+        }, remainingMs);
       }),
     ]);
   } finally {
@@ -448,15 +473,17 @@ class StreamInactivityTimeoutError extends Error {
 
 function createStreamInactivityTimeoutError(
   context: StreamInactivityContext,
-  lastActivity: string,
+  lastProgressActivity: string,
+  lastRawActivity: string,
 ): StreamInactivityTimeoutError {
   return new StreamInactivityTimeoutError(
     [
-      `OpenWiki agent stream produced no events for ${context.timeoutMs} ms.`,
+      `OpenWiki agent stream produced no user-visible progress for ${context.timeoutMs} ms.`,
       `command=${context.command}`,
       `provider=${context.provider}`,
       `model=${context.modelId}`,
-      `lastActivity=${lastActivity}`,
+      `lastProgress=${lastProgressActivity}`,
+      `lastRawActivity=${lastRawActivity}`,
       "The run was aborted instead of waiting indefinitely. Re-run with OPENWIKI_DEBUG=1 for stream/tool diagnostics, or increase OPENWIKI_STREAM_INACTIVITY_TIMEOUT_MS if the model is legitimately taking longer.",
     ].join("\n"),
   );
