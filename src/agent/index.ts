@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import Anthropic, { type ClientOptions } from "@anthropic-ai/sdk";
 import type { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
@@ -7,7 +6,6 @@ import type { ChatModelStreamEvent } from "@langchain/core/language_models/event
 import { type BaseMessage, SystemMessage } from "@langchain/core/messages";
 import type { ChatGenerationChunk, ChatResult } from "@langchain/core/outputs";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import {
@@ -16,7 +14,7 @@ import {
   LocalShellBackend,
   type SubAgent,
 } from "deepagents";
-import { loadOpenWikiEnv, openWikiEnvDir } from "../env.js";
+import { loadOpenWikiEnv } from "../env.js";
 import { createSystemPrompt, createUserPrompt } from "./prompt.js";
 import type {
   OpenWikiCommand,
@@ -221,8 +219,7 @@ async function runOpenWikiAgentCore(
     );
   }
   emitDebug(options, "model=initialized");
-  const checkpointer = await createCheckpointer();
-  emitDebug(options, `checkpointer=${formatUrlDebugValue(checkpointPath)}`);
+  emitDebug(options, "checkpointer=disabled");
   const threadId = options.threadId ?? createThreadId(cwd, createRunThreadId());
   emitDebug(options, `thread=${threadId}`);
   const todoNormalizer = createWriteTodosInputNormalizerMiddleware();
@@ -237,7 +234,6 @@ async function runOpenWikiAgentCore(
         middleware: [todoNormalizer],
       } satisfies SubAgent,
     ],
-    checkpointer,
     backend: new LocalShellBackend({
       maxOutputBytes: 100_000,
       rootDir: cwd,
@@ -283,7 +279,6 @@ async function runOpenWikiAgentCore(
     }
   }
   emitDebug(options, "stream=completed");
-  await chmodIfExists(checkpointPath, 0o600);
 
   if (
     command !== "chat" &&
@@ -322,8 +317,6 @@ function createAttemptOptions(
   };
 }
 
-const checkpointPath = path.join(openWikiEnvDir, "openwiki.sqlite");
-
 function createRunUserMessage(
   command: OpenWikiCommand,
   cwd: string,
@@ -348,26 +341,6 @@ Runtime note:
 - Shell execute commands run on the host. For execute, use cd ${cwd} before repository commands.
 - Do not search parent directories or unrelated repositories.
 `.trim();
-}
-
-async function createCheckpointer(): Promise<SqliteSaver> {
-  await mkdir(openWikiEnvDir, {
-    recursive: true,
-    mode: 0o700,
-  });
-  await chmodIfExists(openWikiEnvDir, 0o700);
-
-  return SqliteSaver.fromConnString(checkpointPath);
-}
-
-async function chmodIfExists(filePath: string, mode: number): Promise<void> {
-  try {
-    await chmod(filePath, mode);
-  } catch (error) {
-    if (!isFileNotFoundError(error)) {
-      throw error;
-    }
-  }
 }
 
 export function createOpenWikiThreadId(cwd = process.cwd()): string {
@@ -395,14 +368,6 @@ function emitDebug(options: OpenWikiRunOptions, message: string): void {
     type: "debug",
     message,
   });
-}
-
-function isFileNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
 }
 
 function ensureProviderKey(provider: OpenWikiProvider): ProviderCredential {

@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { SystemMessage } from "@langchain/core/messages";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatOpenRouter } from "@langchain/openrouter";
 import { createDeepAgent, GENERAL_PURPOSE_SUBAGENT, LocalShellBackend, } from "deepagents";
-import { loadOpenWikiEnv, openWikiEnvDir } from "../env.js";
+import { loadOpenWikiEnv } from "../env.js";
 import { createSystemPrompt, createUserPrompt } from "./prompt.js";
 import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, ANTHROPIC_BASE_URL_ENV_KEY, ANTHROPIC_OAUTH_BETA_HEADER, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderBaseUrlEnvKey, createProviderCredentialConfigurationError, getProviderCredentialRequirement, getProviderLabel, isValidModelId, normalizeModelId, OPENAI_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_API_KEY_ENV_KEY, OPENAI_COMPATIBLE_BASE_URL_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPENROUTER_BASE_URL, OPENROUTER_FALLBACK_MODEL_IDS, OPENWIKI_MODEL_ID_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, providerRequiresBaseUrl, resolveConfiguredProvider, resolveProviderCredential, resolveProviderBaseUrl, } from "../constants.js";
 import { createOpenWikiContentSnapshot, getUpdateNoopStatus, createRunContext, shouldCheckUpdateNoop, writeLastUpdateMetadata, } from "./utils.js";
@@ -99,8 +97,7 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
         emitDebug(options, `openrouter.route=fallback models=${JSON.stringify(createModelRoute(provider, modelId))}`);
     }
     emitDebug(options, "model=initialized");
-    const checkpointer = await createCheckpointer();
-    emitDebug(options, `checkpointer=${formatUrlDebugValue(checkpointPath)}`);
+    emitDebug(options, "checkpointer=disabled");
     const threadId = options.threadId ?? createThreadId(cwd, createRunThreadId());
     emitDebug(options, `thread=${threadId}`);
     const todoNormalizer = createWriteTodosInputNormalizerMiddleware();
@@ -115,7 +112,6 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
                 middleware: [todoNormalizer],
             },
         ],
-        checkpointer,
         backend: new LocalShellBackend({
             maxOutputBytes: 100_000,
             rootDir: cwd,
@@ -154,7 +150,6 @@ async function runOpenWikiAgentCore(command, cwd, options, provider, modelId) {
         }
     }
     emitDebug(options, "stream=completed");
-    await chmodIfExists(checkpointPath, 0o600);
     if (command !== "chat" &&
         openWikiSnapshotBefore !== (await createOpenWikiContentSnapshot(cwd))) {
         await writeLastUpdateMetadata(command, cwd, modelId);
@@ -181,7 +176,6 @@ function createAttemptOptions(options, attemptIndex) {
             : undefined,
     };
 }
-const checkpointPath = path.join(openWikiEnvDir, "openwiki.sqlite");
 function createRunUserMessage(command, cwd, context, options) {
     if (options.isFollowup === true && options.userMessage?.trim()) {
         return options.userMessage.trim();
@@ -200,24 +194,6 @@ Runtime note:
 - Shell execute commands run on the host. For execute, use cd ${cwd} before repository commands.
 - Do not search parent directories or unrelated repositories.
 `.trim();
-}
-async function createCheckpointer() {
-    await mkdir(openWikiEnvDir, {
-        recursive: true,
-        mode: 0o700,
-    });
-    await chmodIfExists(openWikiEnvDir, 0o700);
-    return SqliteSaver.fromConnString(checkpointPath);
-}
-async function chmodIfExists(filePath, mode) {
-    try {
-        await chmod(filePath, mode);
-    }
-    catch (error) {
-        if (!isFileNotFoundError(error)) {
-            throw error;
-        }
-    }
 }
 export function createOpenWikiThreadId(cwd = process.cwd()) {
     return createThreadId(cwd, createRunThreadId());
@@ -239,11 +215,6 @@ function emitDebug(options, message) {
         type: "debug",
         message,
     });
-}
-function isFileNotFoundError(error) {
-    return (error instanceof Error &&
-        "code" in error &&
-        error.code === "ENOENT");
 }
 function ensureProviderKey(provider) {
     const credentialError = createProviderCredentialConfigurationError(provider);
