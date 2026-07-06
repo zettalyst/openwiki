@@ -10,6 +10,12 @@ OpenWiki is a CLI that writes and maintains documentation for your codebase, bui
 npm install -g openwiki
 ```
 
+To install this fork directly from GitHub:
+
+```sh
+npm install -g github:zettalyst/openwiki
+```
+
 ## Quick Start
 
 Initialize OpenWiki, configure your model and API key, then generate documentation

@@ -33,8 +33,9 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
-    "prebuild": "pnpm run clean",
-    "prepack": "pnpm run build",
+    "prebuild": "npm run clean",
+    "prepare": "npm run build",
+    "prepack": "npm run build",
     "start": "node dist/cli.js",
     "test": "vitest run"
   },
