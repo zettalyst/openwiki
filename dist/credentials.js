@@ -391,6 +391,10 @@ function getProviderSetupDetail(provider) {
     if (process.env[OPENWIKI_PROVIDER_ENV_KEY]) {
         return getProviderLabel(provider);
     }
+    const detectedProvider = resolveConfiguredProvider();
+    if (provider === detectedProvider && detectedProvider !== DEFAULT_PROVIDER) {
+        return `detected ${getProviderLabel(detectedProvider)}`;
+    }
     return `default ${getProviderLabel(DEFAULT_PROVIDER)}`;
 }
 function getModelSetupDetail(modelIdOverride, provider) {

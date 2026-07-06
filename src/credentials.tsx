@@ -827,6 +827,12 @@ function getProviderSetupDetail(provider: OpenWikiProvider): string {
     return getProviderLabel(provider);
   }
 
+  const detectedProvider = resolveConfiguredProvider();
+
+  if (provider === detectedProvider && detectedProvider !== DEFAULT_PROVIDER) {
+    return `detected ${getProviderLabel(detectedProvider)}`;
+  }
+
   return `default ${getProviderLabel(DEFAULT_PROVIDER)}`;
 }
 

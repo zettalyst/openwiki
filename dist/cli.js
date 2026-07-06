@@ -74,9 +74,16 @@ function App({ command }) {
         setRunState({ status: "idle" });
     }
     async function selectModel(modelId) {
-        await saveOpenWikiEnv({
+        const updates = {
             [OPENWIKI_MODEL_ID_ENV_KEY]: modelId,
-        });
+        };
+        // Pin the provider alongside the model. A model ID saved against an
+        // auto-detected provider would silently break once another provider's
+        // credentials appear and change the detection result.
+        if (process.env[OPENWIKI_PROVIDER_ENV_KEY] === undefined) {
+            updates[OPENWIKI_PROVIDER_ENV_KEY] = sessionProvider;
+        }
+        await saveOpenWikiEnv(updates);
         setSessionModelId(modelId);
     }
     async function selectProvider(provider) {
@@ -1604,9 +1611,9 @@ function Rows({ rows }) {
 }
 const argv = process.argv.slice(2);
 const parsedCommand = parseCommand(argv);
-if (parsedCommand.kind === "run" && !parsedCommand.dryRun) {
-    await loadOpenWikiEnv();
-}
+// Load ~/.openwiki/.env for every command, including help and dry-run, so
+// provider/model displays match what a real run would resolve.
+await loadOpenWikiEnv();
 const command = resolveStartupCommand(parsedCommand);
 if (shouldPrintStartupError(argv, parsedCommand, command)) {
     process.stderr.write(`${command.message}\n`);

@@ -153,6 +153,70 @@ describe("resolveConfiguredProvider", () => {
     ).toBe("openai-compatible");
   });
 
+  test("pins the full documented detection order", () => {
+    const env: NodeJS.ProcessEnv = {
+      OPENROUTER_API_KEY: "openrouter-api-key",
+      BASETEN_API_KEY: "baseten-api-key",
+      FIREWORKS_API_KEY: "fireworks-api-key",
+      OPENAI_API_KEY: "openai-api-key",
+      OPENAI_COMPATIBLE_API_KEY: "openai-compatible-api-key",
+      OPENAI_COMPATIBLE_BASE_URL: "https://gateway.example.com/v1",
+      CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
+    };
+    const detectionOrder: Array<[string, string]> = [
+      ["OPENROUTER_API_KEY", "openrouter"],
+      ["BASETEN_API_KEY", "baseten"],
+      ["FIREWORKS_API_KEY", "fireworks"],
+      ["OPENAI_API_KEY", "openai"],
+      ["OPENAI_COMPATIBLE_API_KEY", "openai-compatible"],
+    ];
+
+    for (const [credentialEnvKey, expectedProvider] of detectionOrder) {
+      expect(resolveConfiguredProvider(env)).toBe(expectedProvider);
+      delete env[credentialEnvKey];
+    }
+
+    expect(resolveConfiguredProvider(env)).toBe("anthropic");
+  });
+
+  test("ignores whitespace-only credential values during detection", () => {
+    expect(
+      resolveConfiguredProvider({
+        BASETEN_API_KEY: " ",
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
+      }),
+    ).toBe("anthropic");
+
+    expect(
+      resolveProviderCredential("openai", {
+        OPENAI_API_KEY: "   ",
+      }),
+    ).toBeNull();
+  });
+
+  test("skips providers with misconfigured credentials during detection", () => {
+    expect(
+      resolveConfiguredProvider({
+        ANTHROPIC_API_KEY: "sk-ant-oat01-misplaced-oauth-token",
+      }),
+    ).toBe("openrouter");
+  });
+
+  test("falls back to detection when OPENWIKI_PROVIDER is invalid", () => {
+    expect(
+      resolveConfiguredProvider({
+        OPENWIKI_PROVIDER: "claude",
+        OPENAI_API_KEY: "openai-api-key",
+      }),
+    ).toBe("openai");
+
+    expect(
+      resolveConfiguredProvider({
+        OPENWIKI_PROVIDER: "constructor",
+      }),
+    ).toBe("openrouter");
+  });
+
   test("defaults to OpenRouter when no credentials are present", () => {
     expect(resolveConfiguredProvider({})).toBe("openrouter");
   });

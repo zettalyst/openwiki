@@ -27,9 +27,11 @@ import {
   ANTHROPIC_AUTH_TOKEN_ENV_KEY,
   ANTHROPIC_BASE_URL_ENV_KEY,
   ANTHROPIC_OAUTH_BETA_HEADER,
+  anthropicModelSupportsAdaptiveReasoning,
   BASETEN_API_KEY_ENV_KEY,
   CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT,
   CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
+  DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS,
   FIREWORKS_API_KEY_ENV_KEY,
   getDefaultModelId,
   getProviderBaseUrlEnvKey,
@@ -44,12 +46,15 @@ import {
   OPENROUTER_API_KEY_ENV_KEY,
   OPENROUTER_BASE_URL,
   OPENROUTER_FALLBACK_MODEL_IDS,
+  OPENWIKI_MODEL_EFFORT_ENV_KEY,
   OPENWIKI_MODEL_ID_ENV_KEY,
   OPENWIKI_PROVIDER_ENV_KEY,
   providerRequiresBaseUrl,
+  resolveAnthropicModelEffort,
   resolveConfiguredProvider,
   resolveProviderCredential,
   resolveProviderBaseUrl,
+  type AnthropicModelEffort,
   type OpenWikiProvider,
   type ProviderCredential,
 } from "../constants.js";
@@ -119,6 +124,15 @@ export async function runOpenWikiAgent(
   ensureProviderBaseUrl(provider);
   const modelId = resolveModelId(options, provider);
   emitDebug(options, `model=${modelId}`);
+
+  if (provider === "anthropic") {
+    const effort = resolveAnthropicModelEffort(modelId);
+
+    emitDebug(
+      options,
+      `model.effort=${effort ?? "api-default"} adaptiveThinking=${anthropicModelSupportsAdaptiveReasoning(modelId)}`,
+    );
+  }
 
   const debugFetchCapture = installOpenRouterDebugFetch(options);
 
@@ -606,6 +620,7 @@ export async function createModel(provider: OpenWikiProvider, modelId: string) {
 
   if (provider === "anthropic") {
     const baseURL = resolveProviderBaseUrl(provider);
+    const reasoningOptions = createAnthropicReasoningOptions(modelId);
 
     if (credential.type === "auth-token") {
       const AnthropicChatModel =
@@ -624,12 +639,14 @@ export async function createModel(provider: OpenWikiProvider, modelId: string) {
             ),
           }),
         ...(baseURL ? { anthropicApiUrl: baseURL } : {}),
+        ...reasoningOptions,
       });
     }
 
     return new ChatAnthropic(modelId, {
       apiKey: credential.value,
       ...(baseURL ? { anthropicApiUrl: baseURL } : {}),
+      ...reasoningOptions,
     });
   }
 
@@ -657,6 +674,28 @@ export async function createModel(provider: OpenWikiProvider, modelId: string) {
       : undefined,
     model: modelId,
   });
+}
+
+type AnthropicReasoningOptions = {
+  maxTokens?: number;
+  outputConfig?: { effort: AnthropicModelEffort };
+  thinking?: { type: "adaptive" };
+};
+
+function createAnthropicReasoningOptions(
+  modelId: string,
+): AnthropicReasoningOptions {
+  if (!anthropicModelSupportsAdaptiveReasoning(modelId)) {
+    return {};
+  }
+
+  const effort = resolveAnthropicModelEffort(modelId);
+
+  return {
+    maxTokens: DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS,
+    thinking: { type: "adaptive" },
+    ...(effort ? { outputConfig: { effort } } : {}),
+  };
 }
 
 class ChatAnthropicWithClaudeCodeOAuthBilling extends ChatAnthropic {
@@ -1643,6 +1682,7 @@ function formatEnvironmentDebug(): string {
     CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
     OPENROUTER_API_KEY_ENV_KEY,
     OPENWIKI_MODEL_ID_ENV_KEY,
+    OPENWIKI_MODEL_EFFORT_ENV_KEY,
     "LANGCHAIN_TRACING_V2",
     "LANGCHAIN_PROJECT",
     "LANGCHAIN_ENDPOINT",
@@ -1670,7 +1710,11 @@ function formatDebugValue(key: string, value: string | undefined): string {
     return `set(length=${value.length})`;
   }
 
-  if (key === OPENWIKI_MODEL_ID_ENV_KEY || key === OPENWIKI_PROVIDER_ENV_KEY) {
+  if (
+    key === OPENWIKI_MODEL_ID_ENV_KEY ||
+    key === OPENWIKI_PROVIDER_ENV_KEY ||
+    key === OPENWIKI_MODEL_EFFORT_ENV_KEY
+  ) {
     return `set(value=${JSON.stringify(value)})`;
   }
 

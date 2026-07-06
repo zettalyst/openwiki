@@ -2,12 +2,18 @@ import type { ClientOptions } from "@anthropic-ai/sdk";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { beforeEach, afterEach, describe, expect, test } from "vitest";
 import { createModel } from "../src/agent/index.ts";
-import { CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT } from "../src/constants.ts";
+import {
+  CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT,
+  DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS,
+  getDefaultModelId,
+  resolveAnthropicModelEffort,
+} from "../src/constants.ts";
 
 const credentialEnvKeys = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  "OPENWIKI_MODEL_EFFORT",
 ] as const;
 
 type AnthropicClientForTest = {
@@ -149,5 +155,78 @@ describe("createModel Anthropic credentials", () => {
         },
       ],
     });
+  });
+});
+
+describe("Anthropic default model and effort", () => {
+  test("defaults the Anthropic provider to Opus 4.8", () => {
+    expect(getDefaultModelId("anthropic")).toBe("claude-opus-4-8");
+  });
+
+  test("defaults xhigh-capable models to xhigh effort", () => {
+    expect(resolveAnthropicModelEffort("claude-opus-4-8", {})).toBe("xhigh");
+    expect(resolveAnthropicModelEffort("claude-sonnet-5", {})).toBe("xhigh");
+  });
+
+  test("sends no effort for models without adaptive reasoning", () => {
+    expect(resolveAnthropicModelEffort("claude-haiku-4-5", {})).toBeNull();
+    expect(
+      resolveAnthropicModelEffort("claude-haiku-4-5", {
+        OPENWIKI_MODEL_EFFORT: "xhigh",
+      }),
+    ).toBeNull();
+  });
+
+  test("leaves 4.6-family models on the API default effort", () => {
+    expect(resolveAnthropicModelEffort("claude-opus-4-6", {})).toBeNull();
+    expect(
+      resolveAnthropicModelEffort("claude-opus-4-6", {
+        OPENWIKI_MODEL_EFFORT: "max",
+      }),
+    ).toBe("max");
+  });
+
+  test("honors OPENWIKI_MODEL_EFFORT overrides and disable values", () => {
+    expect(
+      resolveAnthropicModelEffort("claude-opus-4-8", {
+        OPENWIKI_MODEL_EFFORT: "medium",
+      }),
+    ).toBe("medium");
+    expect(
+      resolveAnthropicModelEffort("claude-opus-4-8", {
+        OPENWIKI_MODEL_EFFORT: "none",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAnthropicModelEffort("claude-opus-4-8", {
+        OPENWIKI_MODEL_EFFORT: "bogus",
+      }),
+    ).toBe("xhigh");
+  });
+
+  test("configures Opus 4.8 with adaptive thinking, xhigh effort, and output headroom", async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-token";
+
+    const model = (await createModel("anthropic", "claude-opus-4-8")) as {
+      maxTokens: number;
+      outputConfig?: { effort?: string };
+      thinking?: { type?: string };
+    };
+
+    expect(model.thinking).toMatchObject({ type: "adaptive" });
+    expect(model.outputConfig).toMatchObject({ effort: "xhigh" });
+    expect(model.maxTokens).toBe(DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS);
+  });
+
+  test("keeps Haiku on plain API defaults", async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-token";
+
+    const model = (await createModel("anthropic", "claude-haiku-4-5")) as {
+      outputConfig?: { effort?: string };
+      thinking?: { type?: string };
+    };
+
+    expect(model.outputConfig?.effort).toBeUndefined();
+    expect(model.thinking?.type ?? "disabled").not.toBe("adaptive");
   });
 });

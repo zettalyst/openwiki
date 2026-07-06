@@ -16,6 +16,7 @@ const ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat";
 export const OPENROUTER_API_KEY_ENV_KEY = "OPENROUTER_API_KEY";
 export const OPENWIKI_PROVIDER_ENV_KEY = "OPENWIKI_PROVIDER";
 export const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
+export const OPENWIKI_MODEL_EFFORT_ENV_KEY = "OPENWIKI_MODEL_EFFORT";
 export const DEFAULT_PROVIDER = "openrouter";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -108,9 +109,9 @@ export const PROVIDER_CONFIGS: Record<OpenWikiProvider, ProviderConfig> = {
     baseUrlEnvKey: ANTHROPIC_BASE_URL_ENV_KEY,
     label: "Anthropic",
     modelOptions: [
-      { id: "claude-haiku-4-5", label: "Haiku" },
-      { id: "claude-sonnet-5", label: "Sonnet" },
       { id: "claude-opus-4-8", label: "Opus" },
+      { id: "claude-sonnet-5", label: "Sonnet" },
+      { id: "claude-haiku-4-5", label: "Haiku" },
     ],
   },
   openrouter: {
@@ -338,7 +339,7 @@ export function normalizeProvider(
 }
 
 export function isValidProvider(value: string): value is OpenWikiProvider {
-  return value in PROVIDER_CONFIGS;
+  return Object.hasOwn(PROVIDER_CONFIGS, value);
 }
 
 export function resolveConfiguredProvider(
@@ -355,6 +356,10 @@ export function resolveConfiguredProvider(
   // environments (e.g. only CLAUDE_CODE_OAUTH_TOKEN) work without extra setup.
   for (const provider of SELECTABLE_OPENWIKI_PROVIDERS) {
     if (resolveProviderCredential(provider, env) === null) {
+      continue;
+    }
+
+    if (createProviderCredentialConfigurationError(provider, env) !== null) {
       continue;
     }
 
@@ -377,11 +382,129 @@ function getNonEmptyEnvValue(
 ): string | null {
   const value = env[key];
 
-  return value !== undefined && value.length > 0 ? value : null;
+  return value !== undefined && value.trim().length > 0 ? value : null;
 }
 
 function isAnthropicOAuthToken(value: string): boolean {
   return value.trim().startsWith(ANTHROPIC_OAUTH_TOKEN_PREFIX);
+}
+
+export type AnthropicModelEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export const DEFAULT_ANTHROPIC_MODEL_EFFORT: AnthropicModelEffort = "xhigh";
+
+/**
+ * Output-token ceiling for Anthropic models running with adaptive thinking and
+ * an effort setting. Thinking tokens count against max_tokens, and high effort
+ * levels need generous headroom; the SDK default for unknown model IDs is only
+ * 4096, which truncates documentation writes mid-thought.
+ */
+export const DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS = 64_000;
+
+const ANTHROPIC_MODEL_EFFORT_VALUES: readonly AnthropicModelEffort[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+const ANTHROPIC_MODEL_EFFORT_DISABLED_VALUES = ["none", "off", "disabled"];
+
+// Claude 4.6+ model families that accept adaptive thinking plus
+// output_config.effort. Older models (e.g. Haiku 4.5, Opus 4.5) reject
+// adaptive thinking, so they run with the API defaults instead.
+const ANTHROPIC_ADAPTIVE_REASONING_MODEL_ID_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-sonnet-5",
+  "claude-fable-5",
+  "claude-mythos-5",
+];
+
+// The subset of adaptive-reasoning models that support effort "xhigh"
+// (introduced with Opus 4.7). The 4.6 family caps at "high"/"max".
+const ANTHROPIC_XHIGH_EFFORT_MODEL_ID_PREFIXES = [
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-sonnet-5",
+  "claude-fable-5",
+  "claude-mythos-5",
+];
+
+export function anthropicModelSupportsAdaptiveReasoning(
+  modelId: string,
+): boolean {
+  return matchesAnthropicModelIdPrefix(
+    modelId,
+    ANTHROPIC_ADAPTIVE_REASONING_MODEL_ID_PREFIXES,
+  );
+}
+
+/**
+ * Resolves the effort level for an Anthropic model. OPENWIKI_MODEL_EFFORT wins
+ * when set to a valid level ("none"/"off"/"disabled" suppresses the effort
+ * parameter entirely); otherwise xhigh-capable models default to
+ * {@link DEFAULT_ANTHROPIC_MODEL_EFFORT} and the rest use the API default.
+ * Returns null when no effort parameter should be sent.
+ */
+export function resolveAnthropicModelEffort(
+  modelId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AnthropicModelEffort | null {
+  if (!anthropicModelSupportsAdaptiveReasoning(modelId)) {
+    return null;
+  }
+
+  const configured = env[OPENWIKI_MODEL_EFFORT_ENV_KEY]?.trim().toLowerCase();
+
+  if (configured !== undefined && configured.length > 0) {
+    if (ANTHROPIC_MODEL_EFFORT_DISABLED_VALUES.includes(configured)) {
+      return null;
+    }
+
+    if (isAnthropicModelEffort(configured)) {
+      return configured;
+    }
+  }
+
+  return matchesAnthropicModelIdPrefix(
+    modelId,
+    ANTHROPIC_XHIGH_EFFORT_MODEL_ID_PREFIXES,
+  )
+    ? DEFAULT_ANTHROPIC_MODEL_EFFORT
+    : null;
+}
+
+export function isAnthropicModelEffort(
+  value: string,
+): value is AnthropicModelEffort {
+  return (ANTHROPIC_MODEL_EFFORT_VALUES as readonly string[]).includes(value);
+}
+
+export function isValidModelEffortSetting(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+
+  return (
+    isAnthropicModelEffort(normalized) ||
+    ANTHROPIC_MODEL_EFFORT_DISABLED_VALUES.includes(normalized)
+  );
+}
+
+function matchesAnthropicModelIdPrefix(
+  modelId: string,
+  prefixes: readonly string[],
+): boolean {
+  const normalized = modelId.trim().toLowerCase();
+
+  return prefixes.some(
+    (prefix) =>
+      normalized === prefix ||
+      normalized.startsWith(`${prefix}-`) ||
+      normalized.startsWith(`${prefix}@`),
+  );
 }
 
 export function normalizeModelId(value: string): string {

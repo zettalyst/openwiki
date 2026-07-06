@@ -14,6 +14,7 @@ export declare const CLAUDE_CODE_OAUTH_BILLING_SYSTEM_TEXT = "x-anthropic-billin
 export declare const OPENROUTER_API_KEY_ENV_KEY = "OPENROUTER_API_KEY";
 export declare const OPENWIKI_PROVIDER_ENV_KEY = "OPENWIKI_PROVIDER";
 export declare const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
+export declare const OPENWIKI_MODEL_EFFORT_ENV_KEY = "OPENWIKI_MODEL_EFFORT";
 export declare const DEFAULT_PROVIDER = "openrouter";
 export declare const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export type OpenWikiProvider = "anthropic" | "baseten" | "fireworks" | "openai" | "openai-compatible" | "openrouter";
@@ -71,6 +72,26 @@ export declare function getDefaultModelId(provider: OpenWikiProvider): string;
 export declare function normalizeProvider(value: string | null | undefined): OpenWikiProvider | null;
 export declare function isValidProvider(value: string): value is OpenWikiProvider;
 export declare function resolveConfiguredProvider(env?: NodeJS.ProcessEnv): OpenWikiProvider;
+export type AnthropicModelEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export declare const DEFAULT_ANTHROPIC_MODEL_EFFORT: AnthropicModelEffort;
+/**
+ * Output-token ceiling for Anthropic models running with adaptive thinking and
+ * an effort setting. Thinking tokens count against max_tokens, and high effort
+ * levels need generous headroom; the SDK default for unknown model IDs is only
+ * 4096, which truncates documentation writes mid-thought.
+ */
+export declare const DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS = 64000;
+export declare function anthropicModelSupportsAdaptiveReasoning(modelId: string): boolean;
+/**
+ * Resolves the effort level for an Anthropic model. OPENWIKI_MODEL_EFFORT wins
+ * when set to a valid level ("none"/"off"/"disabled" suppresses the effort
+ * parameter entirely); otherwise xhigh-capable models default to
+ * {@link DEFAULT_ANTHROPIC_MODEL_EFFORT} and the rest use the API default.
+ * Returns null when no effort parameter should be sent.
+ */
+export declare function resolveAnthropicModelEffort(modelId: string, env?: NodeJS.ProcessEnv): AnthropicModelEffort | null;
+export declare function isAnthropicModelEffort(value: string): value is AnthropicModelEffort;
+export declare function isValidModelEffortSetting(value: string): boolean;
 export declare function normalizeModelId(value: string): string;
 export declare function isValidModelId(value: string): boolean;
 export declare const OPENWIKI_VERSION = "0.0.1";

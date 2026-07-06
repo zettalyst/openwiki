@@ -80,13 +80,27 @@ OpenWiki supports OpenRouter, Fireworks, Baseten, OpenAI, an OpenAI-compatible p
 
 ### Provider selection
 
-`OPENWIKI_PROVIDER` always wins when set. Without it, OpenWiki picks the first
-provider whose credentials are already present in the environment (or
-`~/.openwiki/.env`), checked in this order: OpenRouter, Baseten, Fireworks,
-OpenAI, OpenAI-compatible (only when its base URL is also set), Anthropic. This
-means an environment with only `CLAUDE_CODE_OAUTH_TOKEN` (or another Anthropic
-credential) runs on the Anthropic provider without any extra configuration.
-When no credentials are found anywhere, OpenWiki defaults to OpenRouter.
+`OPENWIKI_PROVIDER` wins when set to a valid provider id; an invalid value is
+ignored (with a diagnostics warning) and detection proceeds as if it were
+unset. Without a valid setting, OpenWiki picks the first provider whose usable
+credentials are already present in the environment (or `~/.openwiki/.env`),
+checked in this order: OpenRouter, Baseten, Fireworks, OpenAI,
+OpenAI-compatible (only when its base URL is also set), Anthropic. Providers
+whose credentials are misconfigured — for example an OAuth token placed in
+`ANTHROPIC_API_KEY` — are skipped by detection. This means an environment with
+only `CLAUDE_CODE_OAUTH_TOKEN` (or another Anthropic credential) runs on the
+Anthropic provider without any extra configuration. When no credentials are
+found anywhere, OpenWiki defaults to OpenRouter.
+
+### Anthropic reasoning defaults
+
+The Anthropic provider defaults to `claude-opus-4-8`. Claude 4.6+ models run
+with adaptive thinking and a 64K output-token ceiling, and xhigh-capable models
+(Opus 4.7/4.8, Sonnet 5) default to `effort: "xhigh"` — the recommended setting
+for agentic documentation work. Set `OPENWIKI_MODEL_EFFORT` to
+`low`/`medium`/`high`/`xhigh`/`max` to override the effort level, or to `none`
+to omit the effort parameter. Models without adaptive-thinking support (e.g.
+Haiku 4.5) run with plain API defaults.
 
 ### Alternative base URLs
 
