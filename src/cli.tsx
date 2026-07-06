@@ -3138,10 +3138,12 @@ async function runHeadlessCommand(
   command: Extract<CliCommand, { kind: "run" }>,
 ): Promise<void> {
   try {
+    const debugMode = isDebugMode();
+    const shouldStreamProgress = debugMode || !command.print;
     const output: string[] = [];
 
     await runOpenWikiAgent(command.command, process.cwd(), {
-      debug: isDebugMode(),
+      debug: debugMode,
       isFollowup: command.command === "chat",
       modelId: command.modelId,
       threadId: createOpenWikiThreadId(process.cwd()),
@@ -3149,6 +3151,10 @@ async function runHeadlessCommand(
       onEvent: (event) => {
         if (event.type === "text" && event.source !== "subgraph") {
           output.push(event.text);
+        }
+
+        if (shouldStreamProgress) {
+          writeHeadlessProgressEvent(event, debugMode);
         }
       },
     });
@@ -3165,6 +3171,82 @@ async function runHeadlessCommand(
     writePrintErrorDiagnostics(error);
     process.exitCode = 1;
   }
+}
+
+function writeHeadlessProgressEvent(
+  event: OpenWikiRunEvent,
+  debugMode: boolean,
+): void {
+  if (event.type === "tool_start") {
+    process.stderr.write(
+      `[tool:start] ${event.name}${formatHeadlessToolTarget(event.input)}\n`,
+    );
+    return;
+  }
+
+  if (event.type === "tool_end") {
+    process.stderr.write(`[tool:${event.status}] ${event.name}\n`);
+    return;
+  }
+
+  if (event.type === "debug" && debugMode) {
+    process.stderr.write(`[debug] ${event.message}\n`);
+    return;
+  }
+
+  if (event.type === "text" && debugMode && event.source !== "subgraph") {
+    const text = truncateHeadlessValue(event.text.trim().replace(/\s+/g, " "));
+
+    if (text.length > 0) {
+      process.stderr.write(`[text] ${text}\n`);
+    }
+  }
+}
+
+function formatHeadlessToolTarget(input: unknown): string {
+  const parsedInput = parseHeadlessToolInput(input);
+
+  if (isHeadlessRecord(parsedInput)) {
+    const target =
+      getHeadlessString(parsedInput, "path") ??
+      getHeadlessString(parsedInput, "file_path") ??
+      getHeadlessString(parsedInput, "command");
+
+    if (target) {
+      return ` ${truncateHeadlessValue(target)}`;
+    }
+  }
+
+  const fallback = truncateHeadlessValue(JSON.stringify(parsedInput) ?? "");
+
+  return fallback.length > 0 ? ` ${fallback}` : "";
+}
+
+function parseHeadlessToolInput(input: unknown): unknown {
+  if (typeof input !== "string") {
+    return input;
+  }
+
+  try {
+    return JSON.parse(input);
+  } catch {
+    return input;
+  }
+}
+
+function getHeadlessString(
+  value: Record<string, unknown>,
+  key: string,
+): string | null {
+  return typeof value[key] === "string" ? value[key] : null;
+}
+
+function isHeadlessRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function truncateHeadlessValue(value: string): string {
+  return value.length > 180 ? `${value.slice(0, 177)}...` : value;
 }
 
 function writePrintErrorDiagnostics(error: unknown): void {
