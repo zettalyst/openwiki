@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { ToolMessage } from "@langchain/core/messages";
 import {
   createWriteTodosInputNormalizerMiddleware,
@@ -37,6 +37,36 @@ describe("normalizeWriteTodosToolArgs", () => {
 });
 
 describe("createWriteTodosInputNormalizerMiddleware", () => {
+  test("rejects write_file calls without non-empty content before backend writes", async () => {
+    const middleware = createWriteTodosInputNormalizerMiddleware();
+    const handler = vi.fn();
+
+    const result = await middleware.wrapToolCall?.(
+      {
+        toolCall: {
+          id: "call_write_empty",
+          name: "write_file",
+          args: {
+            file_path: "/openwiki/architecture/runtime-layers.md",
+            content: "",
+          },
+        },
+        tool: undefined,
+        state: { messages: [] },
+        runtime: {} as never,
+      },
+      handler,
+    );
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      content: expect.stringContaining("write_file was called without"),
+      name: "write_file",
+      status: "error",
+      tool_call_id: "call_write_empty",
+    });
+  });
+
   test("returns a tool-visible schema error instead of crashing the run", async () => {
     const middleware = createWriteTodosInputNormalizerMiddleware();
 

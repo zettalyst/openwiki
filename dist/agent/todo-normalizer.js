@@ -1,6 +1,7 @@
 import { createMiddleware } from "langchain";
 import { ToolMessage } from "@langchain/core/messages";
 const WRITE_TODOS_TOOL_NAME = "write_todos";
+const WRITE_FILE_TOOL_NAME = "write_file";
 const DEFAULT_TODO_STATUS = "pending";
 const TOOL_SCHEMA_ERROR_MESSAGE = "Received tool input did not match expected schema";
 const TOOL_ERROR_MESSAGE_LIMIT = 2_000;
@@ -31,6 +32,10 @@ export function createWriteTodosInputNormalizerMiddleware() {
     return createMiddleware({
         name: "openWikiWriteTodosInputNormalizer",
         wrapToolCall: async (request, handler) => {
+            const writeFileValidationError = validateWriteFileToolCall(request.toolCall);
+            if (writeFileValidationError) {
+                return writeFileValidationError;
+            }
             const normalizedRequest = request.toolCall.name === WRITE_TODOS_TOOL_NAME
                 ? {
                     ...request,
@@ -56,6 +61,22 @@ export function createWriteTodosInputNormalizerMiddleware() {
         },
     });
 }
+function validateWriteFileToolCall(toolCall) {
+    if (toolCall.name !== WRITE_FILE_TOOL_NAME) {
+        return null;
+    }
+    if (!isRecord(toolCall.args)) {
+        return createToolInputErrorMessage(toolCall, "write_file requires object input with a path and complete Markdown content.");
+    }
+    const content = getWriteFileContent(toolCall.args);
+    if (typeof content !== "string" || content.trim().length === 0) {
+        return createToolInputErrorMessage(toolCall, "write_file was called without non-empty content. Retry with the full final file body in the content field. Do not create placeholder or empty files.");
+    }
+    return null;
+}
+function getWriteFileContent(args) {
+    return hasOwn(args, "content") ? args.content : args.contents;
+}
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -73,7 +94,16 @@ function createToolSchemaErrorMessage(toolCall, error) {
     return new ToolMessage({
         name: toolCall.name,
         tool_call_id: toolCall.id ?? toolCall.name,
+        status: "error",
         content: truncateToolErrorMessage(`Tool input failed schema validation: ${message}\n\n${guidance}`),
+    });
+}
+function createToolInputErrorMessage(toolCall, message) {
+    return new ToolMessage({
+        name: toolCall.name,
+        tool_call_id: toolCall.id ?? toolCall.name,
+        status: "error",
+        content: truncateToolErrorMessage(`Tool input rejected: ${message}`),
     });
 }
 function sanitizeUnsupportedToolMessageContent(message, toolCall) {
