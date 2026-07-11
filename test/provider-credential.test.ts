@@ -105,13 +105,13 @@ describe("resolveConfiguredProvider", () => {
     ).toBe("openai");
   });
 
-  test("keeps preferring OpenRouter when its API key is present", () => {
+  test("prefers Anthropic over OpenRouter in the detection order", () => {
     expect(
       resolveConfiguredProvider({
         OPENROUTER_API_KEY: "openrouter-api-key",
         CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
       }),
-    ).toBe("openrouter");
+    ).toBe("anthropic");
   });
 
   test("falls back to Anthropic when only CLAUDE_CODE_OAUTH_TOKEN is set", () => {
@@ -143,7 +143,7 @@ describe("resolveConfiguredProvider", () => {
       resolveConfiguredProvider({
         OPENAI_COMPATIBLE_API_KEY: "openai-compatible-api-key",
       }),
-    ).toBe("openrouter");
+    ).toBe("openai");
 
     expect(
       resolveConfiguredProvider({
@@ -164,11 +164,11 @@ describe("resolveConfiguredProvider", () => {
       CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-token",
     };
     const detectionOrder: Array<[string, string]> = [
-      ["OPENROUTER_API_KEY", "openrouter"],
-      ["BASETEN_API_KEY", "baseten"],
-      ["FIREWORKS_API_KEY", "fireworks"],
       ["OPENAI_API_KEY", "openai"],
+      ["CLAUDE_CODE_OAUTH_TOKEN", "anthropic"],
+      ["OPENROUTER_API_KEY", "openrouter"],
       ["OPENAI_COMPATIBLE_API_KEY", "openai-compatible"],
+      ["FIREWORKS_API_KEY", "fireworks"],
     ];
 
     for (const [credentialEnvKey, expectedProvider] of detectionOrder) {
@@ -176,7 +176,7 @@ describe("resolveConfiguredProvider", () => {
       delete env[credentialEnvKey];
     }
 
-    expect(resolveConfiguredProvider(env)).toBe("anthropic");
+    expect(resolveConfiguredProvider(env)).toBe("baseten");
   });
 
   test("ignores whitespace-only credential values during detection", () => {
@@ -199,7 +199,7 @@ describe("resolveConfiguredProvider", () => {
       resolveConfiguredProvider({
         ANTHROPIC_API_KEY: "sk-ant-oat01-misplaced-oauth-token",
       }),
-    ).toBe("openrouter");
+    ).toBe("openai");
   });
 
   test("falls back to detection when OPENWIKI_PROVIDER is invalid", () => {
@@ -214,11 +214,11 @@ describe("resolveConfiguredProvider", () => {
       resolveConfiguredProvider({
         OPENWIKI_PROVIDER: "constructor",
       }),
-    ).toBe("openrouter");
+    ).toBe("openai");
   });
 
-  test("defaults to OpenRouter when no credentials are present", () => {
-    expect(resolveConfiguredProvider({})).toBe("openrouter");
+  test("defaults to OpenAI when no credentials are present", () => {
+    expect(resolveConfiguredProvider({})).toBe("openai");
   });
 });
 

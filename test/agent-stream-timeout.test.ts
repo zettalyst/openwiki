@@ -2,7 +2,11 @@ import { describe, expect, test } from "vitest";
 import { consumeOpenWikiAgentStream } from "../src/agent/index.ts";
 
 async function* hangingStreamAfterFirstChunk(): AsyncGenerator<unknown> {
-  yield ["messages", "hello"];
+  yield {
+    type: "event",
+    method: "messages",
+    params: { namespace: [], data: "hello" },
+  };
   await new Promise(() => {
     // Intentionally never resolves.
   });

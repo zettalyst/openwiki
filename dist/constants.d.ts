@@ -5,6 +5,12 @@ export declare const FIREWORKS_API_KEY_ENV_KEY = "FIREWORKS_API_KEY";
 export declare const OPENAI_API_KEY_ENV_KEY = "OPENAI_API_KEY";
 export declare const OPENAI_COMPATIBLE_API_KEY_ENV_KEY = "OPENAI_COMPATIBLE_API_KEY";
 export declare const OPENAI_COMPATIBLE_BASE_URL_ENV_KEY = "OPENAI_COMPATIBLE_BASE_URL";
+export declare const OPENAI_CHATGPT_ACCESS_TOKEN_ENV_KEY = "OPENAI_CHATGPT_ACCESS_TOKEN";
+export declare const OPENAI_CHATGPT_REFRESH_TOKEN_ENV_KEY = "OPENAI_CHATGPT_REFRESH_TOKEN";
+export declare const OPENAI_CHATGPT_EXPIRES_AT_ENV_KEY = "OPENAI_CHATGPT_EXPIRES_AT";
+export declare const OPENAI_CHATGPT_ACCOUNT_ID_ENV_KEY = "OPENAI_CHATGPT_ACCOUNT_ID";
+export declare const OPENAI_CHATGPT_EMAIL_ENV_KEY = "OPENAI_CHATGPT_EMAIL";
+export declare const OPENAI_CHATGPT_PLAN_ENV_KEY = "OPENAI_CHATGPT_PLAN";
 export declare const ANTHROPIC_API_KEY_ENV_KEY = "ANTHROPIC_API_KEY";
 export declare const ANTHROPIC_AUTH_TOKEN_ENV_KEY = "ANTHROPIC_AUTH_TOKEN";
 export declare const ANTHROPIC_BASE_URL_ENV_KEY = "ANTHROPIC_BASE_URL";
@@ -17,9 +23,36 @@ export declare const OPENWIKI_MODEL_ID_ENV_KEY = "OPENWIKI_MODEL_ID";
 export declare const OPENWIKI_MODEL_EFFORT_ENV_KEY = "OPENWIKI_MODEL_EFFORT";
 export declare const OPENWIKI_LANGUAGE_ENV_KEY = "OPENWIKI_LANGUAGE";
 export declare const DEFAULT_WIKI_LANGUAGE = "ko";
-export declare const DEFAULT_PROVIDER = "openrouter";
+export declare const OPENWIKI_PROVIDER_RETRY_ATTEMPTS_ENV_KEY = "OPENWIKI_PROVIDER_RETRY_ATTEMPTS";
+export declare const DEFAULT_PROVIDER_RETRY_ATTEMPTS = 3;
+export declare const OPENWIKI_GOOGLE_ACCESS_TOKEN_ENV_KEY = "OPENWIKI_GOOGLE_ACCESS_TOKEN";
+export declare const OPENWIKI_GOOGLE_CLIENT_ID_ENV_KEY = "OPENWIKI_GOOGLE_CLIENT_ID";
+export declare const OPENWIKI_GOOGLE_CLIENT_SECRET_ENV_KEY = "OPENWIKI_GOOGLE_CLIENT_SECRET";
+export declare const OPENWIKI_GOOGLE_REFRESH_TOKEN_ENV_KEY = "OPENWIKI_GOOGLE_REFRESH_TOKEN";
+export declare const OPENWIKI_GMAIL_ACCESS_TOKEN_ENV_KEY = "OPENWIKI_GMAIL_ACCESS_TOKEN";
+export declare const OPENWIKI_GMAIL_REFRESH_TOKEN_ENV_KEY = "OPENWIKI_GMAIL_REFRESH_TOKEN";
+export declare const OPENWIKI_NOTION_MCP_ACCESS_TOKEN_ENV_KEY = "OPENWIKI_NOTION_MCP_ACCESS_TOKEN";
+export declare const OPENWIKI_NOTION_MCP_CLIENT_ID_ENV_KEY = "OPENWIKI_NOTION_MCP_CLIENT_ID";
+export declare const OPENWIKI_NOTION_MCP_REFRESH_TOKEN_ENV_KEY = "OPENWIKI_NOTION_MCP_REFRESH_TOKEN";
+export declare const OPENWIKI_NOTION_TOKEN_ENV_KEY = "OPENWIKI_NOTION_TOKEN";
+export declare const OPENWIKI_SLACK_BOT_TOKEN_ENV_KEY = "OPENWIKI_SLACK_BOT_TOKEN";
+export declare const OPENWIKI_SLACK_CLIENT_ID_ENV_KEY = "OPENWIKI_SLACK_CLIENT_ID";
+export declare const OPENWIKI_SLACK_CLIENT_SECRET_ENV_KEY = "OPENWIKI_SLACK_CLIENT_SECRET";
+export declare const OPENWIKI_SLACK_USER_TOKEN_ENV_KEY = "OPENWIKI_SLACK_USER_TOKEN";
+export declare const OPENWIKI_X_ACCESS_TOKEN_ENV_KEY = "OPENWIKI_X_ACCESS_TOKEN";
+export declare const OPENWIKI_X_CLIENT_ID_ENV_KEY = "OPENWIKI_X_CLIENT_ID";
+export declare const OPENWIKI_X_CLIENT_SECRET_ENV_KEY = "OPENWIKI_X_CLIENT_SECRET";
+export declare const OPENWIKI_X_REFRESH_TOKEN_ENV_KEY = "OPENWIKI_X_REFRESH_TOKEN";
+export declare const OPENWIKI_TAVILY_API_KEY_ENV_KEY = "TAVILY_API_KEY";
+export declare const DEFAULT_PROVIDER = "openai";
 export declare const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-export type OpenWikiProvider = "anthropic" | "baseten" | "fireworks" | "openai" | "openai-compatible" | "openrouter";
+export type OpenWikiProvider = "anthropic" | "baseten" | "fireworks" | "openai" | "openai-chatgpt" | "openai-compatible" | "openrouter";
+/**
+ * How a provider authenticates. Providers default to `"api-key"` (a pasted
+ * secret persisted to a `*_API_KEY` env var); `"oauth"` providers instead run a
+ * browser login flow and persist short-lived access/refresh tokens.
+ */
+export type ProviderAuthMethod = "api-key" | "oauth";
 export type SelectableOpenWikiProvider = OpenWikiProvider;
 export type ProviderModelOption = {
     id: string;
@@ -32,6 +65,12 @@ export type ProviderCredential = {
 };
 type ProviderConfig = {
     apiKeyEnvKey: string;
+    /**
+     * Authentication method for the provider. Omitted entries are implicitly
+     * {@link ProviderAuthMethod} `"api-key"`. `"oauth"` providers replace the
+     * pasted-key setup step with a browser login and store tokens instead.
+     */
+    authMethod?: ProviderAuthMethod;
     baseURL?: string;
     /**
      * Environment variable that, when set, overrides {@link ProviderConfig.baseURL}
@@ -46,10 +85,9 @@ type ProviderConfig = {
     label: string;
     modelOptions: ProviderModelOption[];
 };
-export declare const SELECTABLE_OPENWIKI_PROVIDERS: readonly ["openrouter", "baseten", "fireworks", "openai", "openai-compatible", "anthropic"];
+export declare const SELECTABLE_OPENWIKI_PROVIDERS: readonly ["openai", "openai-chatgpt", "anthropic", "openrouter", "openai-compatible", "fireworks", "baseten"];
 export declare const PROVIDER_CONFIGS: Record<OpenWikiProvider, ProviderConfig>;
 export declare const DEFAULT_MODEL_ID: string;
-export declare const OPENROUTER_FALLBACK_MODEL_IDS: string[];
 export declare const SUGGESTED_MODEL_IDS: string[];
 export declare function getProviderConfig(provider: OpenWikiProvider): ProviderConfig;
 export declare function getProviderLabel(provider: OpenWikiProvider): string;
@@ -59,6 +97,8 @@ export declare function getProviderCredentialRequirement(provider: OpenWikiProvi
 export declare function createProviderCredentialRequiredMessage(provider: OpenWikiProvider, mode: "interactive" | "non-interactive"): string;
 export declare function createProviderCredentialConfigurationError(provider: OpenWikiProvider, env?: NodeJS.ProcessEnv): string | null;
 export declare function resolveProviderCredential(provider: OpenWikiProvider, env?: NodeJS.ProcessEnv): ProviderCredential | null;
+export declare function getProviderAuthMethod(provider: OpenWikiProvider): ProviderAuthMethod;
+export declare function providerUsesOAuth(provider: OpenWikiProvider): boolean;
 /**
  * Resolves the base URL for a provider, preferring an alternative base URL from
  * the provider's configured environment variable over the built-in default.
@@ -105,7 +145,8 @@ export declare function isValidLanguage(value: string): boolean;
  * through so free-form languages still work.
  */
 export declare function formatLanguageForPrompt(value: string): string;
+export declare function resolveProviderRetryAttempts(env?: NodeJS.ProcessEnv): number;
 export declare function normalizeModelId(value: string): string;
 export declare function isValidModelId(value: string): boolean;
-export declare const OPENWIKI_VERSION = "0.0.1";
+export declare const OPENWIKI_VERSION = "0.1.1";
 export {};

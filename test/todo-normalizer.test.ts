@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment -- expect matchers are typed as any */
 import { describe, expect, test, vi } from "vitest";
 import { ToolMessage } from "@langchain/core/messages";
 import {
@@ -53,7 +54,7 @@ describe("createWriteTodosInputNormalizerMiddleware", () => {
         },
         tool: undefined,
         state: { messages: [] },
-        runtime: {} as never,
+        runtime: {},
       },
       handler,
     );
@@ -82,7 +83,7 @@ describe("createWriteTodosInputNormalizerMiddleware", () => {
         },
         tool: undefined,
         state: { messages: [] },
-        runtime: {} as never,
+        runtime: {},
       },
       () => {
         throw new Error(
@@ -112,7 +113,7 @@ describe("createWriteTodosInputNormalizerMiddleware", () => {
         },
         tool: undefined,
         state: { messages: [] },
-        runtime: {} as never,
+        runtime: {},
       },
       () =>
         new ToolMessage({

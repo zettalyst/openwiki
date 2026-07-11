@@ -3,11 +3,23 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useEffect, useRef, useState } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import { marked } from "marked";
+import { configureAuthProvider, listAuthProviderTools, shouldDiscoverToolsAfterAuth, } from "./auth/configure.js";
+import { startNgrokTunnel } from "./auth/ngrok.js";
+import { formatAuthProviderList, runOAuthAuth } from "./auth/oauth.js";
+import { ensureCodeModeRepoSetup } from "./code-mode.js";
 import { helpContent, isDevelopmentMode, parseCommand, } from "./commands.js";
+import { resolveStartupCommand } from "./startup.js";
 import { InitSetup, needsCredentialSetup, } from "./credentials.js";
 import { getCredentialDiagnostics, loadOpenWikiEnv, saveOpenWikiEnv, } from "./env.js";
 import { createOpenWikiThreadId, runOpenWikiAgent } from "./agent/index.js";
-import { ANTHROPIC_API_KEY_ENV_KEY, ANTHROPIC_AUTH_TOKEN_ENV_KEY, BASETEN_API_KEY_ENV_KEY, CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY, createProviderCredentialConfigurationError, createProviderCredentialRequiredMessage, FIREWORKS_API_KEY_ENV_KEY, getDefaultModelId, getProviderCredentialRequirement, getProviderLabel, getProviderModelOptions, isValidLanguage, isValidModelId, normalizeLanguage, normalizeModelId, normalizeProvider, OPENAI_API_KEY_ENV_KEY, OPENWIKI_LANGUAGE_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, OPENWIKI_MODEL_ID_ENV_KEY, OPENROUTER_API_KEY_ENV_KEY, OPEN_WIKI_DIR, resolveConfiguredProvider, resolveProviderCredential, SELECTABLE_OPENWIKI_PROVIDERS, OPENWIKI_VERSION, } from "./constants.js";
+import { formatChatGptAccountFromEnv } from "./agent/openai-chatgpt-oauth.js";
+import { getErrorMessage, sanitizeDiagnosticText } from "./diagnostics.js";
+import { stripHtmlTags } from "./utils.js";
+import { runOpenWikiIngestion, } from "./ingestion.js";
+import { readOpenWikiOnboardingConfig, saveOpenWikiOnboardingConfig, } from "./onboarding.js";
+import { openWikiLocalWikiDir } from "./openwiki-home.js";
+import { deleteConnectorSchedules, getSavedPowerScheduleStatus, listConnectorSchedules, pauseConnectorSchedules, resumeConnectorSchedules, } from "./schedules.js";
+import { createProviderCredentialConfigurationError, createProviderCredentialRequiredMessage, getProviderApiKeyEnvKey, getDefaultModelId, getProviderCredentialRequirement, getProviderLabel, getProviderModelOptions, isValidLanguage, isValidModelId, normalizeLanguage, normalizeModelId, normalizeProvider, OPENWIKI_LANGUAGE_ENV_KEY, OPENWIKI_PROVIDER_ENV_KEY, OPENWIKI_MODEL_ID_ENV_KEY, resolveConfiguredProvider, resolveProviderCredential, SELECTABLE_OPENWIKI_PROVIDERS, OPENWIKI_VERSION, } from "./constants.js";
 const OPENWIKI_LOGO_LINES = [
     "  ___                  __        ___ _    _ ",
     " / _ \\ _ __   ___ _ __ \\ \\      / (_) | _(_)",
@@ -21,13 +33,19 @@ function App({ command }) {
     const app = useApp();
     const startupModelId = command.kind === "run" ? command.modelId : null;
     const startupLanguage = command.kind === "run" ? command.language : null;
+    const startupRunMode = command.kind === "run" ? command.mode : "personal";
+    const [runMode, setRunMode] = useState(startupRunMode);
+    const [codeRuntimeCwd, setCodeRuntimeCwd] = useState(process.cwd());
+    const runtimeCwd = getRunModeCwd(runMode, codeRuntimeCwd);
+    const runtimeOutputMode = getRunModeOutputMode(runMode);
     const startupProvider = resolveConfiguredProvider();
     const autoExitOnSuccess = shouldAutoExitStartupRun(command);
     const [sessionProvider, setSessionProvider] = useState(startupProvider);
     const [sessionModelId, setSessionModelId] = useState(startupModelId);
     const [sessionLanguage, setSessionLanguage] = useState(startupLanguage);
     const activeRunId = useRef(0);
-    const sessionThreadId = useRef(createOpenWikiThreadId(process.cwd()));
+    const sessionThreadId = useRef(createOpenWikiThreadId(runtimeCwd));
+    const sessionThreadMode = useRef(runMode);
     const mountedRef = useRef(false);
     const nextLogId = useRef(1);
     const nextCompletedRunId = useRef(1);
@@ -37,13 +55,22 @@ function App({ command }) {
     const [completedRuns, setCompletedRuns] = useState([]);
     const [activeUserMessage, setActiveUserMessage] = useState(command.kind === "run" ? command.userMessage : null);
     const [activeMessageIsFollowup, setActiveMessageIsFollowup] = useState(command.kind === "run" && command.command === "chat");
-    const [resolvedCommand, setResolvedCommand] = useState(command.kind === "run" && command.shouldStart ? command.command : null);
+    const shouldOpenSetupForExplicitModeChat = command.kind === "run" &&
+        !command.dryRun &&
+        !command.shouldStart &&
+        command.modeSource !== "default" &&
+        process.stdin.isTTY &&
+        needsCredentialSetup(sessionModelId, runMode);
+    const [resolvedCommand, setResolvedCommand] = useState(command.kind === "run" &&
+        (command.shouldStart || shouldOpenSetupForExplicitModeChat)
+        ? command.command
+        : null);
     const shouldRunInteractiveCredentialSetup = command.kind === "run" &&
         resolvedCommand !== null &&
         !command.dryRun &&
         process.stdin.isTTY &&
         runState.status === "idle" &&
-        needsCredentialSetup(sessionModelId);
+        needsCredentialSetup(sessionModelId, runMode);
     const displayModelId = sessionModelId ?? startupModelId;
     function submitChatMessage(message) {
         if (isExitMessage(message)) {
@@ -62,9 +89,73 @@ function App({ command }) {
         setResolvedCommand(nextCommand);
         setRunState({ status: "idle" });
     }
+    function startIngestionRun(modelId) {
+        const runId = activeRunId.current + 1;
+        activeRunId.current = runId;
+        activeRunCredentialDiagnostics.current = undefined;
+        activeRunLog.current = [];
+        setResolvedCommand(null);
+        setActiveUserMessage("Run source-specific OpenWiki ingestion for configured sources.");
+        setActiveMessageIsFollowup(false);
+        setRunState({
+            status: "ingestion-running",
+            log: [],
+        });
+        void runOpenWikiIngestion(process.cwd(), {
+            debug: isDebugMode(),
+            modelId,
+            target: "all",
+            onEvent: (event) => {
+                if (!mountedRef.current || activeRunId.current !== runId) {
+                    return;
+                }
+                activeRunLog.current = appendRunLogEvent(activeRunLog.current, event, nextLogId);
+                setRunState((currentState) => currentState.status === "ingestion-running"
+                    ? {
+                        ...currentState,
+                        log: activeRunLog.current,
+                    }
+                    : currentState);
+            },
+        })
+            .then((result) => {
+            if (!mountedRef.current || activeRunId.current !== runId) {
+                return;
+            }
+            if (result.results.some((sourceResult) => sourceResult.status === "error")) {
+                process.exitCode = 1;
+            }
+            setRunState({
+                status: "ingestion-success",
+                result,
+                log: activeRunLog.current,
+                credentialDiagnostics: activeRunCredentialDiagnostics.current,
+            });
+        })
+            .catch((error) => {
+            if (!mountedRef.current || activeRunId.current !== runId) {
+                return;
+            }
+            const errorDiagnostics = getErrorDiagnostics(error);
+            const message = getErrorMessage(error);
+            void getCredentialDiagnostics()
+                .catch(() => undefined)
+                .then((credentialDiagnostics) => {
+                if (!mountedRef.current || activeRunId.current !== runId) {
+                    return;
+                }
+                setRunState({
+                    status: "error",
+                    message,
+                    credentialDiagnostics,
+                    errorDiagnostics,
+                });
+            });
+        });
+    }
     function clearSession() {
         activeRunId.current += 1;
-        sessionThreadId.current = createOpenWikiThreadId(process.cwd());
+        sessionThreadId.current = createOpenWikiThreadId(runtimeCwd);
         activeRunCredentialDiagnostics.current = undefined;
         activeRunLog.current = [];
         nextLogId.current = 1;
@@ -110,12 +201,24 @@ function App({ command }) {
         };
     }, []);
     useEffect(() => {
+        if (sessionThreadMode.current === runMode) {
+            return;
+        }
+        sessionThreadId.current = createOpenWikiThreadId(runtimeCwd);
+        sessionThreadMode.current = runMode;
+    }, [runMode, runtimeCwd]);
+    useEffect(() => {
         if (command.kind === "help" || command.kind === "error") {
             process.exitCode = command.exitCode;
             app.exit();
             return;
         }
-        if (command.dryRun) {
+        if (command.kind === "auth") {
+            process.exitCode = command.exitCode;
+            app.exit();
+            return;
+        }
+        if (command.kind === "run" && command.dryRun) {
             process.exitCode = 0;
             app.exit();
             return;
@@ -170,11 +273,16 @@ function App({ command }) {
                 setRunState((currentState) => updateRunningCredentialDiagnostics(currentState, credentialDiagnostics, activeRunCredentialDiagnostics));
             });
         }
-        runOpenWikiAgent(resolvedCommand, process.cwd(), {
+        const setupPromise = runMode === "code"
+            ? ensureCodeModeRepoSetup(runtimeCwd)
+            : Promise.resolve();
+        setupPromise
+            .then(() => runOpenWikiAgent(resolvedCommand, runtimeCwd, {
             debug: isDebugMode(),
             isFollowup: activeMessageIsFollowup,
             language: sessionLanguage,
             modelId: sessionModelId,
+            outputMode: runtimeOutputMode,
             threadId: sessionThreadId.current,
             userMessage: activeUserMessage,
             onEvent: (event) => {
@@ -189,7 +297,7 @@ function App({ command }) {
                     }
                     : currentState);
             },
-        })
+        }))
             .then((result) => {
             if (!mountedRef.current || activeRunId.current !== runId) {
                 return;
@@ -239,7 +347,10 @@ function App({ command }) {
         activeMessageIsFollowup,
         activeUserMessage,
         resolvedCommand,
+        runMode,
         runState.status,
+        runtimeCwd,
+        runtimeOutputMode,
         sessionLanguage,
         sessionModelId,
         sessionProvider,
@@ -254,8 +365,15 @@ function App({ command }) {
         if (runState.status === "success" && autoExitOnSuccess) {
             process.exitCode = 0;
             app.exit();
+            return;
         }
-    }, [app, autoExitOnSuccess, runState.status]);
+        if (runState.status === "ingestion-success" && autoExitOnSuccess) {
+            process.exitCode = runState.result.results.some((sourceResult) => sourceResult.status === "error")
+                ? 1
+                : 0;
+            app.exit();
+        }
+    }, [app, autoExitOnSuccess, runState]);
     if (command.kind === "help") {
         return _jsx(HelpView, {});
     }
@@ -266,12 +384,46 @@ function App({ command }) {
         return (_jsx(DryRunView, { command: command.command, language: command.language, modelId: command.modelId, shouldStart: command.shouldStart, userMessage: command.userMessage }));
     }
     if (shouldRunInteractiveCredentialSetup) {
-        return (_jsx(InitSetup, { modelIdOverride: command.modelId, onComplete: (result) => {
+        return (_jsx(InitSetup, { allowModeSelection: false, mode: command.mode, modelIdOverride: command.modelId, onComplete: (result) => {
+                const nextCodeRuntimeCwd = result.repoRoot ?? codeRuntimeCwd;
+                if (result.repoRoot) {
+                    setCodeRuntimeCwd(result.repoRoot);
+                }
+                if (result.mode !== runMode) {
+                    const nextRuntimeCwd = getRunModeCwd(result.mode, nextCodeRuntimeCwd);
+                    sessionThreadId.current = createOpenWikiThreadId(nextRuntimeCwd);
+                    sessionThreadMode.current = result.mode;
+                    setRunMode(result.mode);
+                }
+                else if (result.repoRoot) {
+                    sessionThreadId.current = createOpenWikiThreadId(result.repoRoot);
+                    sessionThreadMode.current = result.mode;
+                }
                 if (result.modelId) {
                     setSessionModelId(result.modelId);
                 }
                 if (result.provider) {
                     setSessionProvider(result.provider);
+                }
+                if (!result.shouldContinueToRun) {
+                    activeRunId.current += 1;
+                    setResolvedCommand(null);
+                    setActiveUserMessage(null);
+                    setActiveMessageIsFollowup(false);
+                    setRunState({ status: "idle" });
+                    return;
+                }
+                if (result.runIngestionNow && result.mode === "code") {
+                    if (command.kind === "run" && !command.shouldStart) {
+                        setResolvedCommand("init");
+                    }
+                    setActiveMessageIsFollowup(false);
+                    setRunState({ status: "init-setup-saved", result });
+                    return;
+                }
+                if (result.runIngestionNow) {
+                    startIngestionRun(result.modelId ?? sessionModelId);
+                    return;
                 }
                 setRunState({ status: "init-setup-saved", result });
             }, onError: (message) => {
@@ -285,8 +437,17 @@ function App({ command }) {
                     runState.result.savedModelId ||
                     runState.result.savedLangSmithKey ? (_jsx(StatusLine, { tone: "success", label: "Credentials", value: "saved" })) : null, runState.result.provider ? (_jsx(StatusLine, { tone: "muted", label: "Provider", value: getProviderLabel(runState.result.provider) })) : null, runState.result.modelId ? (_jsx(StatusLine, { tone: "muted", label: "Model", value: runState.result.modelId })) : null, _jsx(StatusLine, { tone: "active", label: "Next", value: "starting openwiki" })] }));
     }
+    if (runState.status === "setup-complete-exit") {
+        return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: runState.result.modelId ?? displayModelId, subtitle: "Setup complete" }), _jsx(StatusLine, { tone: "success", label: "Setup", value: "saved; waiting for scheduled ingestion" })] }));
+    }
     if (runState.status === "running") {
         return (_jsxs(Box, { flexDirection: "column", children: [_jsx(ChatHistory, { runs: completedRuns }), _jsx(RunView, { command: runState.command, credentialDiagnostics: runState.credentialDiagnostics, log: runState.log, message: activeUserMessage, modelId: displayModelId })] }));
+    }
+    if (runState.status === "ingestion-running") {
+        return (_jsxs(Box, { flexDirection: "column", children: [_jsx(ChatHistory, { runs: completedRuns }), _jsx(RunView, { command: "update", credentialDiagnostics: runState.credentialDiagnostics, log: runState.log, message: activeUserMessage, modelId: displayModelId })] }));
+    }
+    if (runState.status === "ingestion-success") {
+        return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: displayModelId, subtitle: "Ingestion complete" }), _jsx(IngestionSummary, { result: runState.result }), _jsx(RunView, { command: "update", credentialDiagnostics: runState.credentialDiagnostics, done: true, log: runState.log, message: activeUserMessage, modelId: displayModelId })] }));
     }
     if (runState.status === "success") {
         if (autoExitOnSuccess) {
@@ -309,7 +470,7 @@ function HelpView() {
 }
 function DryRunView({ command, language, modelId, shouldStart, userMessage, }) {
     return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Header, { modelId: modelId, subtitle: "Development dry run" }), _jsxs(Panel, { title: "Execution Plan", children: [_jsx(StatusLine, { tone: "active", label: "Command", value: `openwiki ${command}` }), _jsx(StatusLine, { tone: "muted", label: "Mode", value: command }), _jsx(StatusLine, { tone: "muted", label: "Credentials", value: "not read or requested" }), _jsx(StatusLine, { tone: "muted", label: "Model", value: modelId ??
-                            `saved setting or ${getDefaultModelId(resolveConfiguredProvider())}` }), _jsx(StatusLine, { tone: "muted", label: "Language", value: language ?? "saved setting or repository default" }), _jsx(StatusLine, { tone: "muted", label: "Agent", value: "not invoked" }), _jsx(StatusLine, { tone: "muted", label: "Writes", value: "no files or metadata" }), _jsx(StatusLine, { tone: "muted", label: "Output", value: `${OPEN_WIKI_DIR}/` }), _jsx(StatusLine, { tone: "muted", label: "Startup", value: shouldStart ? "would start run" : "would open chat" }), userMessage ? (_jsx(StatusLine, { tone: "muted", label: "Message", value: userMessage })) : null] })] }));
+                            `saved setting or ${getDefaultModelId(resolveConfiguredProvider())}` }), _jsx(StatusLine, { tone: "muted", label: "Language", value: language ?? "saved setting or repository default" }), _jsx(StatusLine, { tone: "muted", label: "Agent", value: "not invoked" }), _jsx(StatusLine, { tone: "muted", label: "Writes", value: "no files or metadata" }), _jsx(StatusLine, { tone: "muted", label: "Output", value: "~/.openwiki/wiki" }), _jsx(StatusLine, { tone: "muted", label: "Startup", value: shouldStart ? "would start run" : "would open chat" }), userMessage ? (_jsx(StatusLine, { tone: "muted", label: "Message", value: userMessage })) : null] })] }));
 }
 function CredentialDiagnosticsPanel({ diagnostics, }) {
     return (_jsxs(Panel, { title: "Credential Diagnostics", children: [_jsx(Text, { color: "gray", children: "Raw secret values are intentionally not printed." }), diagnostics.map((diagnostic) => (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, children: diagnostic.key }), " ", _jsxs(Text, { color: "gray", children: ["source=", diagnostic.source] })] }), _jsxs(Text, { children: ["length=", diagnostic.length ?? "unset", " preview=", diagnostic.preview] }), _jsxs(Text, { color: diagnostic.warnings.length > 0 ? "yellow" : "gray", children: ["warnings=", diagnostic.warnings.length > 0
@@ -324,15 +485,19 @@ function Header({ compact = false, modelId, showLogo = true, subtitle, }) {
     const displayModelId = sanitizeHeaderValue(modelId ??
         process.env[OPENWIKI_MODEL_ID_ENV_KEY] ??
         getDefaultModelId(resolveConfiguredProvider()), Math.max(8, terminalColumns - 12));
-    const displayProvider = getProviderLabel(resolveConfiguredProvider());
+    const configuredProvider = resolveConfiguredProvider();
+    const displayProvider = getProviderLabel(configuredProvider);
+    const chatGptAccount = configuredProvider === "openai-chatgpt"
+        ? formatChatGptAccountFromEnv()
+        : null;
     const displayDirectory = sanitizeHeaderValue(formatCwd(process.cwd()), Math.max(8, terminalColumns - 17));
     const shouldShowLogo = showLogo && terminalColumns > OPENWIKI_LOGO_WIDTH;
     const tracingEnabled = process.env.LANGCHAIN_TRACING_V2 === "true" &&
         Boolean(process.env.LANGSMITH_API_KEY);
     if (compact) {
-        return (_jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { color: "cyan", children: ">_ " }), _jsx(Text, { bold: true, children: "OpenWiki" }), " ", _jsxs(Text, { color: "gray", children: ["v", OPENWIKI_VERSION] }), " ", _jsx(Text, { color: "gray", children: "provider: " }), _jsx(Text, { color: "white", children: displayProvider }), " ", _jsx(Text, { color: "gray", children: "model: " }), _jsx(Text, { color: "white", children: displayModelId })] }), _jsxs(Text, { children: [_jsx(Text, { color: tracingEnabled ? "green" : "gray", children: tracingEnabled ? "* " : "- " }), _jsxs(Text, { color: tracingEnabled ? "green" : "gray", children: ["LangSmith tracing ", tracingEnabled ? "enabled" : "disabled"] }), _jsx(Text, { color: "gray", children: " - " }), _jsx(Text, { color: "cyan", children: subtitle })] })] }));
+        return (_jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { color: "cyan", children: ">_ " }), _jsx(Text, { bold: true, children: "OpenWiki" }), " ", _jsxs(Text, { color: "gray", children: ["v", OPENWIKI_VERSION] }), " ", _jsx(Text, { color: "gray", children: "provider: " }), _jsx(Text, { color: "white", children: displayProvider }), " ", chatGptAccount ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "gray", children: "account: " }), _jsx(Text, { color: "white", children: chatGptAccount }), " "] })) : null, _jsx(Text, { color: "gray", children: "model: " }), _jsx(Text, { color: "white", children: displayModelId })] }), _jsxs(Text, { children: [_jsx(Text, { color: tracingEnabled ? "green" : "gray", children: tracingEnabled ? "* " : "- " }), _jsxs(Text, { color: tracingEnabled ? "green" : "gray", children: ["LangSmith tracing ", tracingEnabled ? "enabled" : "disabled"] }), _jsx(Text, { color: "gray", children: " - " }), _jsx(Text, { color: "cyan", children: subtitle })] })] }));
     }
-    return (_jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [shouldShowLogo ? (_jsx(Box, { flexDirection: "column", marginBottom: 1, children: OPENWIKI_LOGO_LINES.map((line) => (_jsx(Text, { bold: true, color: "cyan", wrap: "truncate", children: line }, line))) })) : null, _jsxs(Box, { borderColor: "cyan", borderStyle: "round", flexDirection: "column", marginBottom: 1, paddingX: 1, children: [_jsxs(Text, { children: [_jsx(Text, { color: "cyan", children: ">_ " }), _jsx(Text, { bold: true, children: "OpenWiki" }), " ", _jsxs(Text, { color: "gray", children: ["v", OPENWIKI_VERSION] }), " ", _jsx(Text, { color: "gray", children: "agent docs for codebases" })] }), _jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "provider: " }), _jsx(Text, { color: "white", children: displayProvider })] }), _jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "model: " }), _jsx(Text, { color: "white", children: displayModelId })] }), _jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "directory: " }), _jsx(Text, { color: "white", children: displayDirectory })] })] }), _jsxs(Text, { children: [_jsx(Text, { color: tracingEnabled ? "green" : "gray", children: tracingEnabled ? "* " : "- " }), _jsxs(Text, { color: tracingEnabled ? "green" : "gray", children: ["LangSmith tracing ", tracingEnabled ? "enabled" : "disabled"] }), _jsx(Text, { color: "gray", children: " - " }), _jsx(Text, { color: "cyan", children: subtitle })] }), _jsx(Text, { color: "gray", children: "Tip: ask for a docs change, or use /exit when you are done." })] }));
+    return (_jsxs(Box, { flexDirection: "column", marginBottom: 1, children: [shouldShowLogo ? (_jsx(Box, { flexDirection: "column", marginBottom: 1, children: OPENWIKI_LOGO_LINES.map((line) => (_jsx(Text, { bold: true, color: "cyan", wrap: "truncate", children: line }, line))) })) : null, _jsxs(Box, { borderColor: "cyan", borderStyle: "round", flexDirection: "column", marginBottom: 1, paddingX: 1, children: [_jsxs(Text, { children: [_jsx(Text, { color: "cyan", children: ">_ " }), _jsx(Text, { bold: true, children: "OpenWiki" }), " ", _jsxs(Text, { color: "gray", children: ["v", OPENWIKI_VERSION] }), " ", _jsx(Text, { color: "gray", children: "agent docs for codebases" })] }), _jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "provider: " }), _jsx(Text, { color: "white", children: displayProvider })] }), chatGptAccount ? (_jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "account: " }), _jsx(Text, { color: "white", children: chatGptAccount })] })) : null, _jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "model: " }), _jsx(Text, { color: "white", children: displayModelId })] }), _jsxs(Text, { children: [_jsx(Text, { color: "gray", children: "directory: " }), _jsx(Text, { color: "white", children: displayDirectory })] })] }), _jsxs(Text, { children: [_jsx(Text, { color: tracingEnabled ? "green" : "gray", children: tracingEnabled ? "* " : "- " }), _jsxs(Text, { color: tracingEnabled ? "green" : "gray", children: ["LangSmith tracing ", tracingEnabled ? "enabled" : "disabled"] }), _jsx(Text, { color: "gray", children: " - " }), _jsx(Text, { color: "cyan", children: subtitle })] }), _jsx(Text, { color: "gray", children: "Tip: ask for a docs change, or use /exit when you are done." })] }));
 }
 function StatusLine({ tone, label, value }) {
     const color = tone === "success"
@@ -343,6 +508,9 @@ function StatusLine({ tone, label, value }) {
                 ? "yellow"
                 : "gray";
     return (_jsxs(Text, { children: [_jsx(Text, { color: color, children: "* " }), _jsx(Text, { bold: true, color: color, children: label }), " ", _jsx(Text, { color: tone === "muted" ? "gray" : undefined, children: value })] }));
+}
+function IngestionSummary({ result }) {
+    return (_jsx(Panel, { title: "Source Runs", children: result.results.map((sourceResult) => (_jsx(StatusLine, { label: sourceResult.displayName, tone: sourceResult.status === "error" ? "error" : "success", value: `${sourceResult.status}; ${sourceResult.rawFiles.length} raw file(s)` }, sourceResult.sourceInstanceId))) }));
 }
 function RunView({ command, credentialDiagnostics, log, done = false, message = null, modelId = null, }) {
     const [animationFrame, setAnimationFrame] = useState(0);
@@ -476,7 +644,7 @@ function renderHtmlToken(token) {
     if (underlineMatch) {
         return _jsx(Text, { underline: true, children: underlineMatch[1] });
     }
-    return text.replace(/<[^>]*>/gu, "");
+    return stripHtmlTags(text);
 }
 function ChatHistory({ runs }) {
     if (runs.length === 0) {
@@ -495,13 +663,45 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [secretInputMode, setSecretInputMode] = useState(null);
     const input = inputState.value;
     const cursorPosition = inputState.cursorPosition;
     useEffect(() => {
+        if (secretInputMode !== null) {
+            return;
+        }
         setMenuState((currentState) => syncMenuStateForInput(input, currentState, currentModelId, currentProvider));
-    }, [currentModelId, currentProvider, input]);
+    }, [currentModelId, currentProvider, input, secretInputMode]);
     useInput((inputValue, key) => {
         if (isSaving) {
+            return;
+        }
+        if (secretInputMode !== null) {
+            if (isEscapeInput(inputValue, key)) {
+                resetInput();
+                setSecretInputMode(null);
+                setNotice("Credential update canceled.");
+                return;
+            }
+            if (key.return) {
+                void saveSecretInput();
+                return;
+            }
+            if (key.backspace || isRawBackspaceInput(inputValue)) {
+                setInputState(deleteBeforeInputCursor);
+                return;
+            }
+            if (key.delete) {
+                setInputState(inputValue.length === 0
+                    ? deleteBeforeInputCursor
+                    : deleteAtInputCursor);
+                return;
+            }
+            if (inputValue && !key.ctrl && !key.meta) {
+                setError(null);
+                setNotice(null);
+                setInputState((state) => applyRawInputValue(state, inputValue));
+            }
             return;
         }
         if (isMenuUpInput(inputValue, key) && menuState.kind !== "none") {
@@ -516,7 +716,7 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
             void submitInput();
             return;
         }
-        if (inputValue === "\u001b" && menuState.kind !== "none") {
+        if (isEscapeInput(inputValue, key) && menuState.kind !== "none") {
             resetInput();
             return;
         }
@@ -632,6 +832,39 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
             setInputValue("/language ");
             return;
         }
+        if (option.id === "api-key") {
+            if (args && args.length > 0) {
+                setError("Use the masked prompt for API keys; do not pass keys inline.");
+                return;
+            }
+            setError(null);
+            setNotice(`Paste your ${getProviderLabel(currentProvider)} API key.`);
+            setSecretInputMode({
+                envKey: getProviderApiKeyEnvKey(currentProvider),
+                kind: "api-key",
+                label: `${getProviderLabel(currentProvider)} API key`,
+                provider: currentProvider,
+            });
+            setInputState({ cursorPosition: 0, value: "" });
+            setMenuState({ kind: "none" });
+            return;
+        }
+        if (option.id === "langsmith-key") {
+            if (args && args.length > 0) {
+                setError("Use the masked prompt for LangSmith keys; do not pass keys inline.");
+                return;
+            }
+            setError(null);
+            setNotice("Paste your LangSmith API key, or press Enter empty to clear.");
+            setSecretInputMode({
+                envKey: "LANGSMITH_API_KEY",
+                kind: "langsmith-key",
+                label: "LangSmith API key",
+            });
+            setInputState({ cursorPosition: 0, value: "" });
+            setMenuState({ kind: "none" });
+            return;
+        }
         if (option.id === "init" || option.id === "update") {
             resetInput();
             onCommandRun(option.id, args);
@@ -645,7 +878,7 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
         }
         if (option.id === "help") {
             resetInput();
-            setNotice("Slash commands: /provider, /model, /language, /init, /update, /clear, /help, /exit. Use arrows to select.");
+            setNotice("Slash commands: /provider, /model, /language, /api-key, /langsmith-key, /init, /update, /clear, /help, /exit. Use arrows to select.");
             return;
         }
         resetInput();
@@ -726,7 +959,7 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
     async function saveProviderSelection(rawProvider) {
         const provider = normalizeProvider(rawProvider);
         if (provider === null) {
-            setError("Enter a valid provider: openrouter, baseten, fireworks, openai, or anthropic.");
+            setError("Enter a valid provider: openai, openrouter, baseten, fireworks, or anthropic.");
             return;
         }
         setIsSaving(true);
@@ -746,6 +979,45 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
             setIsSaving(false);
         }
     }
+    async function saveSecretInput() {
+        if (secretInputMode === null) {
+            return;
+        }
+        const nextValue = input.trim();
+        if (secretInputMode.kind === "api-key" && nextValue.length === 0) {
+            setError(`${secretInputMode.envKey} is required.`);
+            return;
+        }
+        setIsSaving(true);
+        setError(null);
+        setNotice(null);
+        try {
+            if (secretInputMode.kind === "langsmith-key") {
+                await saveOpenWikiEnv({
+                    LANGCHAIN_PROJECT: nextValue.length > 0 ? "openwiki" : "",
+                    LANGCHAIN_TRACING_V2: nextValue.length > 0 ? "true" : "false",
+                    LANGSMITH_API_KEY: nextValue,
+                });
+            }
+            else {
+                await saveOpenWikiEnv({
+                    [secretInputMode.envKey]: nextValue,
+                });
+            }
+            const savedLabel = secretInputMode.label;
+            resetInput();
+            setSecretInputMode(null);
+            setNotice(`${savedLabel} saved.`);
+        }
+        catch (saveError) {
+            setError(saveError instanceof Error
+                ? saveError.message
+                : "Failed to save credential.");
+        }
+        finally {
+            setIsSaving(false);
+        }
+    }
     function resetInput() {
         setInputState({ cursorPosition: 0, value: "" });
         setMenuState({ kind: "none" });
@@ -759,7 +1031,9 @@ function ChatInput({ currentLanguage, currentModelId, currentProvider, onClear, 
     }
     const beforeCursor = input.slice(0, cursorPosition);
     const afterCursor = input.slice(cursorPosition);
-    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsx(Box, { borderStyle: "single", borderColor: "blue", paddingX: 1, children: _jsxs(Text, { children: [_jsx(Text, { color: "blue", children: ">" }), " ", input.length > 0 ? (_jsxs(_Fragment, { children: [beforeCursor, _jsx(InputCursor, {}), afterCursor] })) : (_jsxs(_Fragment, { children: [_jsx(InputCursor, {}), _jsx(Text, { color: "gray", children: " Ask a follow-up..." })] }))] }) }), _jsx(Text, { children: _jsxs(Text, { color: "gray", children: ["enter to send - / for commands - /exit to quit - cwd", " ", formatCwd(process.cwd())] }) }), menuState.kind !== "none" ? (_jsx(SlashMenu, { currentModelId: currentModelId, currentProvider: currentProvider, input: input, menuState: menuState })) : null, notice ? _jsx(Text, { color: "green", children: notice }) : null, isSaving ? _jsx(Text, { color: "gray", children: "Saving selection..." }) : null, error ? _jsx(Text, { color: "red", children: error }) : null] }));
+    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsx(Box, { borderStyle: "single", borderColor: "blue", paddingX: 1, children: _jsxs(Text, { children: [_jsx(Text, { color: "blue", children: ">" }), " ", secretInputMode !== null ? (_jsxs(_Fragment, { children: [_jsxs(Text, { color: "gray", children: [secretInputMode.envKey, "="] }), _jsx(Text, { color: "yellow", children: formatSecretInputSummary(input) })] })) : input.length > 0 ? (_jsxs(_Fragment, { children: [beforeCursor, _jsx(InputCursor, {}), afterCursor] })) : (_jsxs(_Fragment, { children: [_jsx(InputCursor, {}), _jsx(Text, { color: "gray", children: " Ask a follow-up..." })] }))] }) }), _jsx(Text, { children: _jsx(Text, { color: "gray", children: secretInputMode !== null
+                        ? "enter to save - esc to cancel - input is masked"
+                        : `enter to send - / for commands - /exit to quit - cwd ${formatCwd(process.cwd())}` }) }), secretInputMode !== null ? (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsx(Text, { color: "gray", children: secretInputMode.label }), _jsxs(Text, { children: ["Saving to ", _jsx(Text, { color: "cyan", children: secretInputMode.envKey })] }), secretInputMode.kind === "langsmith-key" ? (_jsx(Text, { color: "gray", children: "Press Enter empty to clear LangSmith." })) : null] })) : menuState.kind !== "none" ? (_jsx(SlashMenu, { currentModelId: currentModelId, currentProvider: currentProvider, input: input, menuState: menuState })) : null, notice ? _jsx(Text, { color: "green", children: notice }) : null, isSaving ? _jsx(Text, { color: "gray", children: "Saving selection..." }) : null, error ? _jsx(Text, { color: "red", children: error }) : null] }));
 }
 const slashCommandOptions = [
     {
@@ -776,6 +1050,16 @@ const slashCommandOptions = [
         description: "Switch the wiki documentation language",
         id: "language",
         label: "/language",
+    },
+    {
+        description: "Set the API key for the current provider",
+        id: "api-key",
+        label: "/api-key",
+    },
+    {
+        description: "Set or clear the LangSmith API key",
+        id: "langsmith-key",
+        label: "/langsmith-key",
     },
     {
         description: "Run an initial OpenWiki documentation pass",
@@ -898,6 +1182,9 @@ function isControlCharacter(character) {
 function isRawBackspaceInput(inputValue) {
     return inputValue === "\u007f" || inputValue === "\b";
 }
+function isEscapeInput(inputValue, key) {
+    return key.escape || inputValue === "\u001b";
+}
 function syncMenuStateForInput(input, currentState, currentModelId, currentProvider) {
     if (input.startsWith("/provider")) {
         const selectedIndex = currentState.kind === "provider"
@@ -997,6 +1284,9 @@ function wrapMenuIndex(index, itemCount) {
 }
 function InputCursor() {
     return _jsx(Text, { color: "cyan", children: "|" });
+}
+function formatSecretInputSummary(value) {
+    return value.length === 0 ? "[empty]" : `[hidden, ${value.length} chars]`;
 }
 function PromptBlock({ message }) {
     return (_jsx(Box, { flexDirection: "column", marginBottom: 1, children: _jsxs(Text, { backgroundColor: "gray", wrap: "wrap", children: [" ", _jsx(Text, { color: "cyan", children: ">" }), " ", message] }) }));
@@ -1585,51 +1875,6 @@ function isDiagnosticValue(value) {
 function isRecord(value) {
     return typeof value === "object" && value !== null;
 }
-function getErrorMessage(error) {
-    const message = error instanceof Error ? error.message : "OpenWiki agent run failed.";
-    if (isOpenRouterServerError(error, message)) {
-        return "OpenRouter/provider returned 500 Internal Server Error. Try retrying or switching models with /model. Run with OPENWIKI_DEBUG=1 to show provider metadata.";
-    }
-    return sanitizeDiagnosticText(message);
-}
-function isOpenRouterServerError(error, message) {
-    if (isRecord(error)) {
-        const status = error.statusCode ?? error.status;
-        const name = error instanceof Error ? error.name : null;
-        if ((status === 500 || status === "500") &&
-            (name === "OpenRouterError" || "metadata" in error)) {
-            return true;
-        }
-    }
-    return /OpenRouterError/iu.test(String(error)) ||
-        /Internal Server Error/iu.test(message)
-        ? /\b500\b|Internal Server Error/iu.test(message)
-        : false;
-}
-function sanitizeDiagnosticText(value) {
-    let sanitized = value;
-    for (const key of [
-        BASETEN_API_KEY_ENV_KEY,
-        FIREWORKS_API_KEY_ENV_KEY,
-        OPENAI_API_KEY_ENV_KEY,
-        ANTHROPIC_API_KEY_ENV_KEY,
-        ANTHROPIC_AUTH_TOKEN_ENV_KEY,
-        CLAUDE_CODE_OAUTH_TOKEN_ENV_KEY,
-        OPENROUTER_API_KEY_ENV_KEY,
-        "LANGSMITH_API_KEY",
-    ]) {
-        const secret = process.env[key];
-        if (secret && secret.length > 0) {
-            sanitized = sanitized.split(secret).join(`[REDACTED:${key}]`);
-        }
-    }
-    return sanitized
-        .replace(/(Incorrect API key provided:\s*)([^\s.]+)/giu, "$1[REDACTED:API_KEY]")
-        .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, "Bearer [REDACTED]")
-        .replace(/\bsk-or-v1-[A-Za-z0-9_-]+/gu, "[REDACTED:OPENROUTER_API_KEY]")
-        .replace(/\bsk-[A-Za-z0-9_-]+/gu, "[REDACTED:API_KEY]")
-        .replace(/\bls[v_][A-Za-z0-9_-]+/gu, "[REDACTED:LANGSMITH_API_KEY]");
-}
 function sanitizeHeaderValue(value, maxLength = 80) {
     const compactValue = stripControlCharacters(value)
         .replace(/[^\S\n]+/gu, " ")
@@ -1666,8 +1911,23 @@ const parsedCommand = parseCommand(argv);
 // Load ~/.openwiki/.env for every command, including help and dry-run, so
 // provider/model displays match what a real run would resolve.
 await loadOpenWikiEnv();
-const command = resolveStartupCommand(parsedCommand);
-if (shouldPrintStartupError(argv, parsedCommand, command)) {
+const command = await resolveStartupCommand(parsedCommand, {
+    cwd: process.cwd(),
+    isStdinTTY: Boolean(process.stdin.isTTY),
+});
+if (command.kind === "auth") {
+    await runAuthCommand(command);
+}
+else if (command.kind === "ngrok") {
+    await runNgrokCommand(command);
+}
+else if (command.kind === "cron") {
+    await runCronCommand(command);
+}
+else if (command.kind === "ingest") {
+    await runIngestCommand(command);
+}
+else if (shouldPrintStartupError(argv, parsedCommand, command)) {
     process.stderr.write(`${command.message}\n`);
     process.exitCode = command.exitCode;
 }
@@ -1677,6 +1937,256 @@ else if (shouldRunHeadlessCommand(command)) {
 else {
     render(_jsx(App, { command: command }));
 }
+async function runNgrokCommand(command) {
+    try {
+        await startNgrokTunnel({
+            port: command.port,
+            url: command.url,
+        });
+        process.exitCode = 0;
+    }
+    catch (error) {
+        process.stderr.write(`${getErrorMessage(error)}\n`);
+        process.exitCode = 1;
+    }
+}
+async function runCronCommand(command) {
+    try {
+        const config = await readOpenWikiOnboardingConfig();
+        if (command.action !== "list") {
+            if (!command.target) {
+                throw new Error(`Target is required for cron ${command.action}.`);
+            }
+            const result = command.action === "pause"
+                ? await pauseConnectorSchedules(config, command.target)
+                : command.action === "resume"
+                    ? await resumeConnectorSchedules({
+                        config,
+                        cwd: process.cwd(),
+                        target: command.target,
+                    })
+                    : await deleteConnectorSchedules(config, command.target);
+            await saveOpenWikiOnboardingConfig(result.config);
+            process.stdout.write(formatScheduleMutationResult(command.action, result));
+            await printCronSchedules(result.config);
+            process.exitCode = 0;
+            return;
+        }
+        await printCronSchedules(config);
+        process.exitCode = 0;
+    }
+    catch (error) {
+        process.stderr.write(`${getErrorMessage(error)}\n`);
+        process.exitCode = 1;
+    }
+}
+async function printCronSchedules(config) {
+    const schedules = await listConnectorSchedules(config);
+    const powerSchedule = getSavedPowerScheduleStatus(config);
+    process.stdout.write(formatScheduleHeader(schedules.length));
+    process.stdout.write(formatPowerScheduleStatus(powerSchedule));
+    if (schedules.length === 0) {
+        process.stdout.write("No connector schedules are configured.\n");
+        return;
+    }
+    for (const schedule of schedules) {
+        process.stdout.write(formatScheduleStatus(schedule));
+    }
+}
+function formatScheduleMutationResult(action, result) {
+    const actionLabel = action === "delete" ? "Deleted" : action === "pause" ? "Paused" : "Resumed";
+    const changed = result.connectorIds.length > 0 ? result.connectorIds.join(", ") : "none";
+    const skipped = result.skippedConnectorIds.length > 0
+        ? result.skippedConnectorIds.join(", ")
+        : "none";
+    const rows = [
+        [`${actionLabel}`, changed],
+        ["Skipped", skipped],
+    ];
+    if (result.powerSchedule) {
+        rows.push([
+            "Mac wake",
+            result.powerSchedule.enabled ? "configured" : "not configured",
+        ]);
+    }
+    const labelWidth = Math.max(...rows.map(([label]) => label.length));
+    const body = rows
+        .map(([label, value]) => `  ${label.padEnd(labelWidth)} : ${value}`)
+        .join("\n");
+    const warnings = result.warnings.length > 0
+        ? `\n${result.warnings.map((warning) => `  Warning : ${warning}`).join("\n")}`
+        : "";
+    return ["", "Cron update", "-----------", body + warnings, ""].join("\n");
+}
+function formatScheduleHeader(scheduleCount) {
+    const title = "OpenWiki Schedules";
+    const summary = scheduleCount === 1
+        ? "1 connector schedule configured"
+        : `${scheduleCount} connector schedules configured`;
+    return [
+        "",
+        "=".repeat(title.length),
+        title,
+        "=".repeat(title.length),
+        summary,
+        "",
+    ].join("\n");
+}
+function formatPowerScheduleStatus(schedule) {
+    const divider = "-".repeat(22);
+    if (!schedule) {
+        return [
+            divider,
+            "Mac Wake Window",
+            divider,
+            "  Status : not configured",
+            "",
+            "",
+        ].join("\n");
+    }
+    const rows = [
+        ["Status", schedule.enabled ? "configured" : "disabled"],
+        ["Days", schedule.days || "unknown"],
+        ["Wake", schedule.wakeTime || "unknown"],
+        ["Sleep", schedule.sleepTime || "unknown"],
+        ["Updated", schedule.updatedAt],
+    ];
+    if (schedule.warning) {
+        rows.push(["Warning", schedule.warning]);
+    }
+    const labelWidth = Math.max(...rows.map(([label]) => label.length));
+    const body = rows
+        .map(([label, value]) => `  ${label.padEnd(labelWidth)} : ${value}`)
+        .join("\n");
+    return [divider, "Mac Wake Window", divider, body, "", ""].join("\n");
+}
+function formatScheduleStatus(schedule) {
+    const launchdStatus = schedule.pausedAt !== undefined
+        ? "paused"
+        : schedule.launchAgentPath === undefined
+            ? "not installed"
+            : schedule.launchAgentLoaded
+                ? "loaded"
+                : schedule.launchAgentPlistExists
+                    ? "plist exists, not loaded"
+                    : "plist missing";
+    const rows = [
+        ["Schedule", schedule.description],
+        ["Cron", schedule.expression],
+        ["Launchd", launchdStatus],
+        ["Updated", schedule.updatedAt],
+    ];
+    if (schedule.pausedAt) {
+        rows.push(["Paused", schedule.pausedAt]);
+    }
+    if (schedule.launchAgentPath) {
+        rows.push(["Plist", schedule.launchAgentPath]);
+    }
+    if (schedule.warning) {
+        rows.push(["Warning", schedule.warning]);
+    }
+    const labelWidth = Math.max(...rows.map(([label]) => label.length));
+    const body = rows
+        .map(([label, value]) => `  ${label.padEnd(labelWidth)} : ${value}`)
+        .join("\n");
+    const scheduleLabel = schedule.displayName ?? schedule.sourceInstanceId;
+    const divider = "-".repeat(Math.max(18, scheduleLabel.length + 10));
+    return [
+        divider,
+        `Source : ${scheduleLabel}`,
+        ...(schedule.connectorId ? [`Connector : ${schedule.connectorId}`] : []),
+        divider,
+        body,
+        "",
+    ].join("\n");
+}
+async function runIngestCommand(command) {
+    try {
+        const result = await runOpenWikiIngestion(process.cwd(), {
+            debug: isDebugMode(),
+            modelId: command.modelId,
+            scheduledOnly: command.scheduledOnly,
+            target: command.target,
+            onEvent: (event) => {
+                if (event.type === "text" && event.source !== "subgraph") {
+                    process.stdout.write(event.text);
+                }
+            },
+        });
+        process.stdout.write("\nIngestion summary\n");
+        for (const sourceResult of result.results) {
+            process.stdout.write(`- ${sourceResult.displayName}: ${sourceResult.status}; ${sourceResult.rawFiles.length} raw file(s)\n`);
+        }
+        process.exitCode = result.results.some((sourceResult) => sourceResult.status === "error")
+            ? 1
+            : 0;
+    }
+    catch (error) {
+        process.stderr.write(`${getErrorMessage(error)}\n`);
+        writePrintErrorDiagnostics(error);
+        process.exitCode = 1;
+    }
+}
+async function runAuthCommand(command) {
+    try {
+        if (command.action === "list") {
+            process.stdout.write(`${formatAuthProviderList()}\n`);
+            process.exitCode = 0;
+            return;
+        }
+        if (command.provider === null) {
+            throw new Error("Auth provider is required.");
+        }
+        if (command.action === "configure") {
+            const result = await configureAuthProvider(command.provider, {
+                force: command.force,
+            });
+            process.stdout.write(`${result.status === "exists" ? "Config already exists" : `Config ${result.status}`}: ${result.configPath}\n`);
+            for (const nextStep of result.nextSteps) {
+                process.stdout.write(`- ${nextStep}\n`);
+            }
+            process.exitCode = 0;
+            return;
+        }
+        if (command.action === "tools") {
+            const result = await listAuthProviderTools(command.provider);
+            process.stdout.write(`Tools for ${result.provider} (${result.configPath})\n`);
+            process.stdout.write(`Wrote discovery: ${result.rawFile}\n`);
+            process.stdout.write(`${JSON.stringify(result.tools, null, 2)}\n`);
+            process.exitCode = 0;
+            return;
+        }
+        const result = await runOAuthAuth(command.provider);
+        process.stdout.write(`Saved ${result.provider} auth values: ${result.savedEnvKeys.join(", ")}\n`);
+        const configureResult = await configureAuthProvider(command.provider, {
+            force: command.force,
+        });
+        process.stdout.write(`${configureResult.status === "exists" ? "Config already exists" : `Config ${configureResult.status}`}: ${configureResult.configPath}\n`);
+        for (const nextStep of configureResult.nextSteps) {
+            process.stdout.write(`- ${nextStep}\n`);
+        }
+        if (shouldDiscoverToolsAfterAuth(command.provider)) {
+            try {
+                const toolsResult = await listAuthProviderTools(command.provider);
+                process.stdout.write(`Discovered ${toolsResult.tools.length} MCP tool(s); wrote ${toolsResult.rawFile}\n`);
+                const toolNames = toolsResult.tools
+                    .map((tool) => tool.name)
+                    .slice(0, 20);
+                if (toolNames.length > 0) {
+                    process.stdout.write(`Tools: ${toolNames.join(", ")}\n`);
+                }
+            }
+            catch (error) {
+                process.stdout.write(`MCP tool discovery skipped: ${getErrorMessage(error)}\n`);
+            }
+        }
+        process.exitCode = 0;
+    }
+    catch (error) {
+        process.stderr.write(`${getErrorMessage(error)}\n`);
+        process.exitCode = 1;
+    }
+}
 function argvRequestsPrint(argv) {
     return argv.some((arg) => arg === "-p" || arg === "--print");
 }
@@ -1684,7 +2194,14 @@ function shouldPrintStartupError(argv, parsedCommand, command) {
     return (command.kind === "error" &&
         (argvRequestsPrint(argv) ||
             !process.stdin.isTTY ||
+            command.message.startsWith("openwiki --init requires a mode.") ||
             (parsedCommand.kind === "run" && parsedCommand.shouldStart)));
+}
+function getRunModeCwd(mode, codeRuntimeCwd = process.cwd()) {
+    return mode === "code" ? codeRuntimeCwd : openWikiLocalWikiDir;
+}
+function getRunModeOutputMode(mode) {
+    return mode === "code" ? "repository" : "local-wiki";
 }
 function shouldAutoExitStartupRun(command) {
     return (command.kind === "run" &&
@@ -1704,12 +2221,18 @@ async function runHeadlessCommand(command) {
         const debugMode = isDebugMode();
         const shouldStreamProgress = debugMode || !command.print;
         const output = [];
-        await runOpenWikiAgent(command.command, process.cwd(), {
+        const runtimeCwd = getRunModeCwd(command.mode);
+        const runtimeOutputMode = getRunModeOutputMode(command.mode);
+        if (command.mode === "code") {
+            await ensureCodeModeRepoSetup(runtimeCwd);
+        }
+        await runOpenWikiAgent(command.command, runtimeCwd, {
             debug: debugMode,
             isFollowup: command.command === "chat",
             language: command.language,
             modelId: command.modelId,
-            threadId: createOpenWikiThreadId(process.cwd()),
+            outputMode: runtimeOutputMode,
+            threadId: createOpenWikiThreadId(runtimeCwd),
             userMessage: command.userMessage,
             onEvent: (event) => {
                 if (event.type === "text" && event.source !== "subgraph") {
@@ -1794,39 +2317,4 @@ function writePrintErrorDiagnostics(error) {
     for (const diagnostic of diagnostics) {
         process.stderr.write(`${diagnostic.label}: ${diagnostic.value}\n`);
     }
-}
-function resolveStartupCommand(command) {
-    if (command.kind === "run" &&
-        !command.dryRun &&
-        command.shouldStart &&
-        (command.print || !process.stdin.isTTY)) {
-        const provider = resolveConfiguredProvider();
-        const providerCredentialError = createProviderCredentialConfigurationError(provider);
-        if (providerCredentialError !== null) {
-            return {
-                kind: "error",
-                exitCode: 1,
-                message: providerCredentialError,
-            };
-        }
-        const providerCredential = resolveProviderCredential(provider);
-        if (providerCredential === null) {
-            return {
-                kind: "error",
-                exitCode: 1,
-                message: createProviderCredentialRequiredMessage(provider, "non-interactive"),
-            };
-        }
-    }
-    if (command.kind === "run" &&
-        !command.dryRun &&
-        command.userMessage !== null &&
-        command.userMessage.trim().length === 0) {
-        return {
-            kind: "error",
-            exitCode: 1,
-            message: "User message cannot be empty.",
-        };
-    }
-    return command;
 }

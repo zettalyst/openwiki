@@ -1,4 +1,4 @@
-import type { OpenWikiCommand, OpenWikiRunOptions, RunContext, UpdateMetadata } from "./types.js";
+import type { OpenWikiCommand, OpenWikiOutputMode, OpenWikiRunOptions, RunContext, UpdateMetadata } from "./types.js";
 export type OpenWikiContentSnapshot = string;
 export type UpdateNoopStatus = {
     shouldSkip: true;
@@ -11,7 +11,7 @@ export type UpdateNoopStatus = {
 /**
  * Builds the per-run context the prompt uses to reason about prior docs and git changes.
  */
-export declare function createRunContext(command: OpenWikiCommand, cwd: string): Promise<RunContext>;
+export declare function createRunContext(command: OpenWikiCommand, cwd: string, outputMode?: OpenWikiOutputMode): Promise<RunContext>;
 export declare function getUpdateNoopStatus(cwd: string): Promise<UpdateNoopStatus>;
 export declare function shouldCheckUpdateNoop(options: OpenWikiRunOptions): boolean;
 /**
@@ -27,12 +27,12 @@ export declare function isLanguageMigrationRequired(lastUpdate: UpdateMetadata |
 /**
  * Records a successful init/update run so future updates can diff from this git head.
  */
-export declare function writeLastUpdateMetadata(command: OpenWikiCommand, cwd: string, modelId: string, language: string): Promise<void>;
+export declare function writeLastUpdateMetadata(command: OpenWikiCommand, cwd: string, modelId: string, language: string, outputMode?: OpenWikiOutputMode): Promise<void>;
 /**
  * Hashes OpenWiki content, excluding run metadata, to detect real documentation changes.
  */
-export declare function createOpenWikiContentSnapshot(cwd: string): Promise<OpenWikiContentSnapshot>;
+export declare function createOpenWikiContentSnapshot(cwd: string, outputMode?: OpenWikiOutputMode): Promise<OpenWikiContentSnapshot>;
 /**
  * Reads prior run metadata if it exists and is structurally valid.
  */
-export declare function readLastUpdateMetadata(cwd: string): Promise<UpdateMetadata | null>;
+export declare function readLastUpdateMetadata(cwd: string, outputMode?: OpenWikiOutputMode): Promise<UpdateMetadata | null>;

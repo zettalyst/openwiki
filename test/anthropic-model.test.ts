@@ -52,27 +52,27 @@ afterEach(() => {
 });
 
 describe("createModel Anthropic credentials", () => {
-  test("uses API key credentials on the existing ChatAnthropic path", async () => {
+  test("uses API key credentials on the existing ChatAnthropic path", () => {
     process.env.ANTHROPIC_API_KEY = "anthropic-api-key";
 
-    const model = await createModel("anthropic", "claude-sonnet-5");
+    const model = createModel("anthropic", "claude-sonnet-5", 3);
 
     expect((model as { apiKey?: string }).apiKey).toBe("anthropic-api-key");
   });
 
-  test("fails before model creation when an OAuth token is placed in ANTHROPIC_API_KEY", async () => {
+  test("fails before model creation when an OAuth token is placed in ANTHROPIC_API_KEY", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-oat01-misplaced-oauth-token";
 
-    await expect(createModel("anthropic", "claude-sonnet-5")).rejects.toThrow(
+    expect(() => createModel("anthropic", "claude-sonnet-5", 3)).toThrow(
       "ANTHROPIC_API_KEY appears to contain an Anthropic OAuth token.",
     );
   });
 
-  test("injects bearer auth client with OAuth beta header for ANTHROPIC_AUTH_TOKEN", async () => {
+  test("injects bearer auth client with OAuth beta header for ANTHROPIC_AUTH_TOKEN", () => {
     process.env.ANTHROPIC_AUTH_TOKEN = "anthropic-auth-token";
     process.env.ANTHROPIC_API_KEY = "anthropic-api-key";
 
-    const model = await createModel("anthropic", "claude-sonnet-5");
+    const model = createModel("anthropic", "claude-sonnet-5", 3);
     const client = (model as ClientFactoryModel).createClient({
       apiKey: "langchain-api-key",
       defaultHeaders: {
@@ -87,10 +87,10 @@ describe("createModel Anthropic credentials", () => {
     );
   });
 
-  test("uses CLAUDE_CODE_OAUTH_TOKEN as bearer auth fallback", async () => {
+  test("uses CLAUDE_CODE_OAUTH_TOKEN as bearer auth fallback", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-token";
 
-    const model = await createModel("anthropic", "claude-sonnet-5");
+    const model = createModel("anthropic", "claude-sonnet-5", 3);
     const client = (model as ClientFactoryModel).createClient({});
 
     expect(client.apiKey).toBeNull();
@@ -103,17 +103,17 @@ describe("createModel Anthropic credentials", () => {
   test("prepends Claude Code OAuth billing system block for CLAUDE_CODE_OAUTH_TOKEN", async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-token";
 
-    const model = await createModel("anthropic", "claude-sonnet-5");
+    const model = createModel("anthropic", "claude-sonnet-5", 3);
     let capturedRequest: unknown;
 
     (
       model as {
         completionWithRetry: (request: unknown) => Promise<unknown>;
       }
-    ).completionWithRetry = async (request) => {
+    ).completionWithRetry = (request) => {
       capturedRequest = request;
 
-      return {
+      return Promise.resolve({
         id: "msg_test",
         type: "message",
         role: "assistant",
@@ -128,7 +128,7 @@ describe("createModel Anthropic credentials", () => {
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 0,
         },
-      };
+      });
     };
 
     await (
@@ -204,10 +204,10 @@ describe("Anthropic default model and effort", () => {
     ).toBe("xhigh");
   });
 
-  test("configures Opus 4.8 with adaptive thinking, xhigh effort, and output headroom", async () => {
+  test("configures Opus 4.8 with adaptive thinking, xhigh effort, and output headroom", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-token";
 
-    const model = (await createModel("anthropic", "claude-opus-4-8")) as {
+    const model = createModel("anthropic", "claude-opus-4-8", 3) as {
       maxTokens: number;
       outputConfig?: { effort?: string };
       thinking?: { type?: string };
@@ -218,10 +218,10 @@ describe("Anthropic default model and effort", () => {
     expect(model.maxTokens).toBe(DEFAULT_ANTHROPIC_EFFORT_MAX_OUTPUT_TOKENS);
   });
 
-  test("keeps Haiku on plain API defaults", async () => {
+  test("keeps Haiku on plain API defaults", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "claude-code-oauth-token";
 
-    const model = (await createModel("anthropic", "claude-haiku-4-5")) as {
+    const model = createModel("anthropic", "claude-haiku-4-5", 3) as {
       outputConfig?: { effort?: string };
       thinking?: { type?: string };
     };

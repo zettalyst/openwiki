@@ -16,7 +16,7 @@ export function normalizeWriteTodosToolArgs(args: unknown): unknown {
   }
 
   let changed = false;
-  const todos = args.todos.map((todo) => {
+  const todos = (args.todos as unknown[]).map((todo) => {
     if (!isRecord(todo) || hasOwn(todo, "status")) {
       return todo;
     }

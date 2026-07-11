@@ -4,27 +4,46 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isValidLanguage, normalizeLanguage, OPEN_WIKI_DIR, UPDATE_METADATA_PATH, } from "../constants.js";
+import { isExpectedSnapshotRaceError, isFileNotFoundError, } from "../fs-errors.js";
+import { readOpenWikiOnboardingConfig, readRepositoryWikiInstructions, } from "../onboarding.js";
 const execFileAsync = promisify(execFile);
+const LOCAL_WIKI_METADATA_PATH = ".last-update.json";
 // Wikis recorded before the language field existed were generated in English.
 const LEGACY_WIKI_LANGUAGE = "en";
 /**
  * Builds the per-run context the prompt uses to reason about prior docs and git changes.
  */
-export async function createRunContext(command, cwd) {
-    const lastUpdate = await readLastUpdateMetadata(cwd);
+export async function createRunContext(command, cwd, outputMode = "repository") {
+    const lastUpdate = await readLastUpdateMetadata(cwd, outputMode);
+    const wikiGoal = await readRunWikiGoal(cwd, outputMode);
     if (command === "chat") {
         return {
             lastUpdate,
             gitSummary: "Not applicable for chat.",
+            wikiGoal,
+        };
+    }
+    if (outputMode === "local-wiki") {
+        return {
+            lastUpdate,
+            gitSummary: "Local wiki mode: connector source evidence is provided through raw data paths and OpenWiki connector tools. Git repository diff context is not used for this run.",
+            wikiGoal,
         };
     }
     return {
         lastUpdate,
         gitSummary: await createGitSummary(command, cwd, lastUpdate),
+        wikiGoal,
     };
 }
+async function readRunWikiGoal(cwd, outputMode) {
+    if (outputMode === "repository") {
+        return readRepositoryWikiInstructions(cwd);
+    }
+    return (await readOpenWikiOnboardingConfig()).wikiGoal;
+}
 export async function getUpdateNoopStatus(cwd) {
-    const lastUpdate = await readLastUpdateMetadata(cwd);
+    const lastUpdate = await readLastUpdateMetadata(cwd, "repository");
     if (!lastUpdate?.gitHead) {
         return { shouldSkip: false, reason: "missing previous update git head" };
     }
@@ -83,12 +102,12 @@ export function isLanguageMigrationRequired(lastUpdate, language) {
 /**
  * Records a successful init/update run so future updates can diff from this git head.
  */
-export async function writeLastUpdateMetadata(command, cwd, modelId, language) {
-    const metadataFile = path.join(cwd, UPDATE_METADATA_PATH);
+export async function writeLastUpdateMetadata(command, cwd, modelId, language, outputMode = "repository") {
+    const metadataFile = getMetadataFilePath(cwd, outputMode);
     const metadata = {
         updatedAt: new Date().toISOString(),
         command,
-        gitHead: await getGitHead(cwd),
+        gitHead: outputMode === "repository" ? await getGitHead(cwd) : undefined,
         model: modelId,
         language: normalizeLanguage(language),
     };
@@ -98,8 +117,8 @@ export async function writeLastUpdateMetadata(command, cwd, modelId, language) {
 /**
  * Hashes OpenWiki content, excluding run metadata, to detect real documentation changes.
  */
-export async function createOpenWikiContentSnapshot(cwd) {
-    const openWikiDir = path.join(cwd, OPEN_WIKI_DIR);
+export async function createOpenWikiContentSnapshot(cwd, outputMode = "repository") {
+    const openWikiDir = getWikiContentRoot(cwd, outputMode);
     const hash = createHash("sha256");
     await addDirectoryToSnapshot(hash, openWikiDir, "");
     return hash.digest("hex");
@@ -107,8 +126,8 @@ export async function createOpenWikiContentSnapshot(cwd) {
 /**
  * Reads prior run metadata if it exists and is structurally valid.
  */
-export async function readLastUpdateMetadata(cwd) {
-    const metadataFile = path.join(cwd, UPDATE_METADATA_PATH);
+export async function readLastUpdateMetadata(cwd, outputMode = "repository") {
+    const metadataFile = getMetadataFilePath(cwd, outputMode);
     try {
         const rawMetadata = await readFile(metadataFile, "utf8");
         const parsedMetadata = JSON.parse(rawMetadata);
@@ -155,7 +174,8 @@ async function addDirectoryToSnapshot(hash, directory, relativeDirectory) {
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
         const entryPath = path.join(directory, entry.name);
         const relativePath = path.join(relativeDirectory, entry.name);
-        if (relativePath === path.basename(UPDATE_METADATA_PATH)) {
+        if (relativePath === path.basename(UPDATE_METADATA_PATH) ||
+            relativePath === LOCAL_WIKI_METADATA_PATH) {
             continue;
         }
         if (entry.isDirectory()) {
@@ -174,6 +194,14 @@ async function addDirectoryToSnapshot(hash, directory, relativeDirectory) {
         hash.update(fileContent);
         hash.update("\0");
     }
+}
+function getWikiContentRoot(cwd, outputMode) {
+    return outputMode === "local-wiki" ? cwd : path.join(cwd, OPEN_WIKI_DIR);
+}
+function getMetadataFilePath(cwd, outputMode) {
+    return outputMode === "local-wiki"
+        ? path.join(cwd, LOCAL_WIKI_METADATA_PATH)
+        : path.join(cwd, UPDATE_METADATA_PATH);
 }
 /**
  * Reads snapshot bytes while tolerating files that move mid-scan.
@@ -279,17 +307,6 @@ function isOpenWikiPath(changedPath) {
 }
 function normalizeGitPath(value) {
     return value.trim().replace(/\\/gu, "/");
-}
-function isFileNotFoundError(error) {
-    return (error instanceof Error &&
-        "code" in error &&
-        error.code === "ENOENT");
-}
-function isExpectedSnapshotRaceError(error) {
-    if (!(error instanceof Error) || !("code" in error)) {
-        return false;
-    }
-    return ["EISDIR", "ENOENT", "ENOTDIR"].includes(error.code ?? "");
 }
 function isExecError(error) {
     return error instanceof Error && ("stdout" in error || "stderr" in error);

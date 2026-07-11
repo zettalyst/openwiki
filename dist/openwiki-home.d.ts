@@ -1,0 +1,13 @@
+export declare const openWikiHomeDir: string;
+export declare const openWikiConnectorsDir: string;
+export declare const openWikiLocalWikiDir: string;
+export declare const openWikiSkillsDir: string;
+export declare function getConnectorDir(connectorId: string): string;
+export declare function getConnectorConfigPath(connectorId: string): string;
+export declare function getConnectorStatePath(connectorId: string): string;
+export declare function getConnectorRawDir(connectorId: string): string;
+export declare function getConnectorLogsDir(connectorId: string): string;
+export declare function ensureOpenWikiHome(): Promise<void>;
+export declare function ensureConnectorHome(connectorId: string): Promise<void>;
+export declare function assertSafeConnectorId(connectorId: string): void;
+export declare function resolveConnectorRawPath(connectorId: string, relativePath: string): string;

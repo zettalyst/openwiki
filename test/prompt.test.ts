@@ -4,6 +4,7 @@ import {
   createSystemPrompt,
   createUserPrompt,
 } from "../src/agent/prompt.ts";
+import type { RunContext } from "../src/agent/types.ts";
 
 describe("createSystemPrompt", () => {
   test("requires full documentation pages to be written with write_file", () => {
@@ -39,7 +40,7 @@ describe("createSystemPrompt", () => {
   });
 
   test("supports an explicit documentation language", () => {
-    const prompt = createSystemPrompt("init", { language: "en" });
+    const prompt = createSystemPrompt("init", "local-wiki", { language: "en" });
 
     expect(prompt).toContain("Write all wiki documentation content in English");
     expect(prompt).not.toContain("Korean (한국어):");
@@ -50,7 +51,11 @@ describe("language migration mode", () => {
   const migrationOptions = { language: "ko", isLanguageMigration: true };
 
   test("replaces the surgical update instructions for update runs", () => {
-    const instructions = createModeInstructions("update", migrationOptions);
+    const instructions = createModeInstructions(
+      "update",
+      "repository",
+      migrationOptions,
+    );
 
     expect(instructions).toContain("documentation language migration run");
     expect(instructions).toContain(
@@ -61,7 +66,7 @@ describe("language migration mode", () => {
   });
 
   test("keeps normal update instructions when no migration is needed", () => {
-    const instructions = createModeInstructions("update", {
+    const instructions = createModeInstructions("update", "repository", {
       language: "ko",
       isLanguageMigration: false,
     });
@@ -76,6 +81,7 @@ describe("language migration mode", () => {
       "update",
       context,
       null,
+      "repository",
       migrationOptions,
     );
 
@@ -83,5 +89,27 @@ describe("language migration mode", () => {
       "Migrate the existing OpenWiki documentation for this repository to Korean (한국어)",
     );
     expect(userPrompt).not.toContain("Keep edits surgical");
+  });
+});
+
+describe("createUserPrompt", () => {
+  test("includes the wiki brief for repository init runs", () => {
+    const context: RunContext = {
+      gitSummary: "No git changes.",
+      lastUpdate: null,
+      wikiGoal: "Prioritize architecture and runbooks.",
+    };
+
+    expect(createUserPrompt("init", context, null, "repository")).toContain(
+      "Prioritize architecture and runbooks.",
+    );
+  });
+
+  test("treats repository INSTRUCTIONS.md as read-only brief metadata", () => {
+    const prompt = createSystemPrompt("init", "repository");
+
+    expect(prompt).toContain("/openwiki/INSTRUCTIONS.md");
+    expect(prompt).toContain("shared, user-authored OpenWiki brief");
+    expect(prompt).toContain("do not edit it during normal init/update/chat");
   });
 });

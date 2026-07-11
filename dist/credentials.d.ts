@@ -1,19 +1,32 @@
 import React from "react";
 import { type OpenWikiProvider } from "./constants.js";
+import type { OpenWikiRunMode } from "./commands.js";
+import { type OpenWikiOnboardingConfig } from "./onboarding.js";
 export type InitSetupResult = {
+    mode: OpenWikiRunMode;
     modelId: string | null;
+    onboardingCompleted: boolean;
     provider: OpenWikiProvider | null;
+    repoRoot?: string;
+    runIngestionNow: boolean;
     savedApiKey: boolean;
     savedBaseUrl: boolean;
     savedLangSmithKey: boolean;
     savedModelId: boolean;
     savedProvider: boolean;
+    shouldContinueToRun: boolean;
 };
 type InitSetupProps = {
+    allowModeSelection?: boolean;
+    mode: OpenWikiRunMode;
     modelIdOverride?: string | null;
     onComplete: (result: InitSetupResult) => void;
     onError: (message: string) => void;
 };
-export declare function needsCredentialSetup(modelIdOverride?: string | null): boolean;
-export declare function InitSetup({ modelIdOverride, onComplete, onError, }: InitSetupProps): React.JSX.Element;
+type PromptStep = "api-key" | "base-url" | "code-repo-confirm" | "code-repo-path" | "final" | "langsmith" | "model" | "oauth-login" | "provider" | "run-mode" | "source-auth" | "global-cron-custom" | "global-cron-mode" | "global-power-mode" | "source-description" | "source-description-custom" | "source-menu" | "source-path" | "source-confirm-continue" | "source-secret" | "template" | "wiki-goal";
+export declare function needsCredentialSetup(modelIdOverride?: string | null, mode?: OpenWikiRunMode): boolean;
+export declare function InitSetup({ allowModeSelection, mode, modelIdOverride, onComplete, onError, }: InitSetupProps): React.JSX.Element;
+export declare function getInitialStep(modelIdOverride: string | null, provider: OpenWikiProvider, onboardingConfig?: OpenWikiOnboardingConfig, mode?: OpenWikiRunMode, allowModeSelection?: boolean): PromptStep | null;
+export declare function getNextStepAfterProvider(provider: OpenWikiProvider, modelIdOverride: string | null, onboardingConfig?: OpenWikiOnboardingConfig, mode?: OpenWikiRunMode, forceModelStep?: boolean): PromptStep | null;
+export declare function findNearestGitRepoRoot(startPath: string): string | null;
 export {};

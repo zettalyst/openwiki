@@ -8,7 +8,8 @@ From `src/commands.ts` and `README.md`, the supported entry patterns are:
 
 - `openwiki` — open the interactive chat UI.
 - `openwiki "message"` — send a chat message immediately, then stay open.
-- `openwiki --init [message]` — generate initial OpenWiki documentation.
+- `openwiki personal --init [message]` — generate initial local personal brain wiki documentation.
+- `openwiki code --init [message]` — generate initial repository documentation.
 - `openwiki --update [message]` — refresh existing OpenWiki documentation.
 - `openwiki -p, --print` — run once and print the final assistant output (non-interactive).
 - `openwiki --modelId <id>` / `--model-id <id>` — choose a model ID for the run.
@@ -19,7 +20,7 @@ The parser rejects incompatible combinations such as `--init` and `--update` tog
 
 ### Auto-exit for init/update
 
-When `--init` or `--update` is run in a TTY (without `--print`), the CLI starts the run, streams agent output, and **exits automatically on success** (`shouldAutoExitStartupRun` in `src/cli.tsx`). This means `openwiki --init` behaves like a one-shot command while still showing a live UI. Chat runs and `--print` runs are not affected — chat stays open for follow-ups, and `--print` writes to stdout and exits.
+When explicit init (`openwiki personal --init` or `openwiki code --init`) or `--update` is run in a TTY (without `--print`), the CLI starts the run, streams agent output, and **exits automatically on success** (`shouldAutoExitStartupRun` in `src/cli.tsx`). Chat runs and `--print` runs are not affected — chat stays open for follow-ups, and `--print` writes to stdout and exits.
 
 ### Non-interactive mode
 
@@ -47,7 +48,7 @@ The UI persists provider and model selection back to `~/.openwiki/.env` through 
 
 The first interactive run can prompt for:
 
-- a **provider** (`OPENWIKI_PROVIDER`) — openrouter, baseten, fireworks, openai, openai-compatible, or anthropic,
+- a **provider** (`OPENWIKI_PROVIDER`) — openai, openrouter, baseten, fireworks, openai-compatible, or anthropic,
 - the **provider API key** (e.g. `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `ANTHROPIC_API_KEY`, `BASETEN_API_KEY`, `FIREWORKS_API_KEY`),
 - a **base URL** for providers that require one (the openai-compatible provider prompts for `OPENAI_COMPATIBLE_BASE_URL`),
 - a **model ID** stored as `OPENWIKI_MODEL_ID` — chosen from the provider's model list or a custom ID,
@@ -63,16 +64,28 @@ Providers and their model options are defined in `PROVIDER_CONFIGS` in `src/cons
 
 | Provider          | Env key                                                                   | Base URL                                | Models                                                                |
 | ----------------- | ------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| openai            | `OPENAI_API_KEY`                                                          | (default)                               | GPT 5.6 Terra/Luna/Sol, GPT 5.5, GPT 5.4 mini                         |
+| openai-chatgpt    | ChatGPT OAuth login (stored tokens)                                       | Codex Responses backend                 | same list as openai                                                   |
 | openrouter        | `OPENROUTER_API_KEY`                                                      | `https://openrouter.ai/api/v1`          | GLM 5.2, Fusion, Kimi K2.7 Code, Claude Opus/Sonnet, GPT 5.4 mini/5.5 |
 | baseten           | `BASETEN_API_KEY`                                                         | `https://inference.baseten.co/v1`       | GLM 5.2, Kimi K2.7 Code                                               |
 | fireworks         | `FIREWORKS_API_KEY`                                                       | `https://api.fireworks.ai/inference/v1` | GLM 5.2, Kimi K2.7 Code                                               |
-| openai            | `OPENAI_API_KEY`                                                          | (default)                               | GPT 5.4 mini, GPT 5.5                                                 |
 | openai-compatible | `OPENAI_COMPATIBLE_API_KEY`                                               | `OPENAI_COMPATIBLE_BASE_URL` (required) | custom model ID only                                                  |
 | anthropic         | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | (default, or `ANTHROPIC_BASE_URL`)      | Opus (default), Sonnet, Haiku                                         |
 
-The default provider is `openrouter`. `resolveConfiguredProvider()` picks the provider from `OPENWIKI_PROVIDER`; when that is unset or invalid, it auto-detects the first provider in the table above with usable credentials in the environment (skipping misconfigured credentials and base-URL-less openai-compatible setups), then falls back to `DEFAULT_PROVIDER`. See [Credentials and updates](../operations/credentials-and-updates.md#provider-resolution) for the exact rules.
+The default provider is `openai`. `resolveConfiguredProvider()` picks the provider from `OPENWIKI_PROVIDER`; when that is unset or invalid, it auto-detects the first provider in `SELECTABLE_OPENWIKI_PROVIDERS` order (openai, openai-chatgpt, anthropic, openrouter, openai-compatible, fireworks, baseten) with usable credentials in the environment (skipping misconfigured credentials and base-URL-less openai-compatible setups), then falls back to `DEFAULT_PROVIDER`. See [Credentials and updates](../operations/credentials-and-updates.md#provider-resolution) for the exact rules.
 
 On the anthropic provider, Claude 4.6+ models run with adaptive thinking and a 64K output-token ceiling, and xhigh-capable models (Opus 4.7/4.8, Sonnet 5) default to `effort: "xhigh"`. `OPENWIKI_MODEL_EFFORT` overrides the level (`low`/`medium`/`high`/`xhigh`/`max`, or `none` to omit the parameter). Models without adaptive thinking (e.g. Haiku 4.5) use plain API defaults.
+
+### Provider retry attempts
+
+Set `OPENWIKI_PROVIDER_RETRY_ATTEMPTS` to override the number of retries after
+the first provider request. The value must be a positive integer:
+
+```bash
+OPENWIKI_PROVIDER_RETRY_ATTEMPTS=3
+```
+
+If the value is unset, OpenWiki defaults to 3 retries.
 
 ### Alternative base URLs
 
@@ -129,8 +142,7 @@ The help content is centralized in `src/commands.ts` and is used by the CLI UI. 
 
 - model IDs are trimmed,
 - they must match the allowed character pattern (`/^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u`),
-- URLs are rejected,
-- fallback models for OpenRouter are defined in `OPENROUTER_FALLBACK_MODEL_IDS` in `src/constants.ts`.
+- URLs are rejected.
 
 ## What to change when editing the CLI
 
